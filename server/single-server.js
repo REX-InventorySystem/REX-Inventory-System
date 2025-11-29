@@ -6,7 +6,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // MongoDB connection
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://jw3600:12347@cluster0.3mcmxey.mongodb.net/inventory_system?retryWrites=true&w=majority';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://Rex_Ho:931919@cluster0.kfjopnu.mongodb.net/inventory_system?retryWrites=true&w=majority';
 const VALID_SECURITY_CODE = "INV2025";
 
 let db;
