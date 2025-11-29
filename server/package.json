@@ -1,1 +1,18 @@
+{
+  "name": "inventory-system-server",
+  "version": "1.0.0",
+  "description": "Complete Inventory Management System",
+  "main": "single-server.js",
+  "scripts": {
+    "start": "node single-server.js",
+    "dev": "nodemon single-server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "mongodb": "^5.8.1",
+    "pdfkit": "^0.14.0"
+  },
+  "author": "Rex_Ho",
+  "license": "MIT"
+}
 
