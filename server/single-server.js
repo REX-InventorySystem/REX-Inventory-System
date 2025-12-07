@@ -3800,8 +3800,8 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('   ✅ User Authentication (Login/Register)');
   console.log('   ✅ Complete Inventory Management with Edit/Delete');
   console.log('   ✅ Search & Date Range Filter for Inventory');
-  console.log('   ✅ Purchase (Stock In) with Search & PDF Generation');
-  console.log('   ✅ Sales (Stock Out) with Search & PDF Generation');
+  console.log('   ✅ Purchase (Stock In) with Search & Automatic PDF Download');
+  console.log('   ✅ Sales (Stock Out) with Search & Automatic PDF Download');
   console.log('   ✅ Reference Report Generation with PDF (Updated from Invoice)');
   console.log('   ✅ Statements & Reports with History');
   console.log('   ✅ Account Settings & Password Management');
@@ -3825,4 +3825,5 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('   ✅ NEW: Automatic PDF download after purchase/sale processing');
   console.log('   ✅ FIXED: "Purchase not found" error in PDF download');
   console.log('   ✅ FIXED: JSON parsing error for reference report PDF');
+  console.log('   ✅ RESTORED: Automatic PDF download for Purchase & Sales pages');
 });
