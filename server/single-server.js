@@ -317,6 +317,22 @@ app.get('/api/reference-reports', async (req, res) => {
   }
 });
 
+app.get('/api/reference-reports/:id', async (req, res) => {
+  try {
+    const referenceReport = await db.collection('reference_reports').findOne({ 
+      _id: new ObjectId(req.params.id) 
+    });
+    
+    if (!referenceReport) {
+      return res.status(404).json({ error: 'Reference report not found' });
+    }
+    
+    res.json(referenceReport);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post('/api/reference-reports/add', async (req, res) => {
   try {
     const reportNumber = await getNextSequence('reference_reports');
@@ -326,11 +342,13 @@ app.post('/api/reference-reports/add', async (req, res) => {
       createdAt: new Date()
     };
     
-    await db.collection('reference_reports').insertOne(referenceReportData);
+    const result = await db.collection('reference_reports').insertOne(referenceReportData);
+    
     res.json({ 
       message: 'Reference report saved successfully',
       reportNumber: referenceReportData.reportNumber,
-      referenceData: referenceReportData
+      referenceData: referenceReportData,
+      id: result.insertedId.toString()
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -368,7 +386,7 @@ app.post('/api/purchases', async (req, res) => {
       itemId: typeof item.itemId === 'string' ? new ObjectId(item.itemId) : item.itemId
     }));
     
-    await db.collection('purchases').insertOne(purchaseData);
+    const result = await db.collection('purchases').insertOne(purchaseData);
     
     // Update inventory quantities
     for (const item of purchaseData.items) {
@@ -386,7 +404,8 @@ app.post('/api/purchases', async (req, res) => {
     res.json({ 
       message: 'Purchase recorded successfully',
       purchaseNumber: purchaseData.purchaseNumber,
-      purchaseData: purchaseData
+      purchaseData: purchaseData,
+      id: result.insertedId.toString()
     });
   } catch (error) {
     console.error('Purchase error:', error);
@@ -398,6 +417,22 @@ app.get('/api/purchases', async (req, res) => {
   try {
     const purchases = await db.collection('purchases').find({}).sort({ createdAt: -1 }).toArray();
     res.json(purchases);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/purchases/:id', async (req, res) => {
+  try {
+    const purchase = await db.collection('purchases').findOne({ 
+      _id: new ObjectId(req.params.id) 
+    });
+    
+    if (!purchase) {
+      return res.status(404).json({ error: 'Purchase not found' });
+    }
+    
+    res.json(purchase);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -476,7 +511,9 @@ app.get('/api/sales', async (req, res) => {
 
 app.get('/api/sales/:id', async (req, res) => {
   try {
-    const sale = await db.collection('sales').findOne({ _id: new ObjectId(req.params.id) });
+    const sale = await db.collection('sales').findOne({ 
+      _id: new ObjectId(req.params.id) 
+    });
     
     if (!sale) {
       return res.status(404).json({ error: 'Sale not found' });
@@ -2139,6 +2176,7 @@ function getReferencePage() {
 
         // Now generate PDF with the report number
         referenceData.reportNumber = saveResult.reportNumber;
+        referenceData._id = saveResult.id; // Add the ID for later retrieval
         
         const pdfResponse = await fetch('/generate-reference-report-pdf', {
           method: 'POST',
@@ -2365,8 +2403,14 @@ function getPurchasePage() {
         
         if (response.ok) {
           latestPurchaseData = data.purchaseData;
+          latestPurchaseData._id = data.id; // Store the ID for PDF generation
+          
           alert('Purchase processed successfully! Purchase Number: ' + data.purchaseNumber);
           document.getElementById('downloadPdf').style.display = 'inline-block';
+          
+          // Automatically download the PDF after processing
+          await downloadPurchasePDF();
+          
           clearPurchase(); // Clear items after successful processing
           loadAvailableItems(); // Refresh available items
         } else {
@@ -2385,22 +2429,29 @@ function getPurchasePage() {
       }
 
       try {
-        const response = await fetch('/generate-purchase-pdf', {
+        // Fetch the latest purchase data from the database
+        const response = await fetch('/api/purchases/' + latestPurchaseData._id);
+        if (!response.ok) {
+          throw new Error('Purchase not found');
+        }
+        const purchase = await response.json();
+        
+        const pdfResponse = await fetch('/generate-purchase-pdf', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ purchaseData: latestPurchaseData })
+          body: JSON.stringify({ purchaseData: purchase })
         });
 
-        if (response.ok) {
-          const blob = await response.blob();
+        if (pdfResponse.ok) {
+          const blob = await pdfResponse.blob();
           const url = window.URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
-          a.download = \`purchase-order-\${latestPurchaseData.purchaseNumber}.pdf\`;
+          a.download = \`purchase-order-\${purchase.purchaseNumber || Date.now()}.pdf\`;
           a.click();
           window.URL.revokeObjectURL(url);
         } else {
-          const errorData = await response.json();
+          const errorData = await pdfResponse.json();
           throw new Error(errorData.error || 'PDF generation failed');
         }
       } catch (error) {
@@ -2613,8 +2664,14 @@ function getSalesPage() {
         
         if (response.ok) {
           latestSalesData = data.salesData;
+          latestSalesData._id = data.id; // Store the ID for PDF generation
+          
           alert('Sale processed successfully! Sales Number: ' + data.salesNumber);
           document.getElementById('downloadPdf').style.display = 'inline-block';
+          
+          // Automatically download the PDF after processing
+          await downloadSalesPDF();
+          
           clearSale(); // Clear items after successful processing
           loadAvailableItems(); // Refresh available items
         } else {
@@ -2633,22 +2690,29 @@ function getSalesPage() {
       }
 
       try {
-        const response = await fetch('/generate-sales-pdf', {
+        // Fetch the latest sales data from the database
+        const response = await fetch('/api/sales/' + latestSalesData._id);
+        if (!response.ok) {
+          throw new Error('Sale not found');
+        }
+        const sale = await response.json();
+        
+        const pdfResponse = await fetch('/generate-sales-pdf', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ salesData: latestSalesData })
+          body: JSON.stringify({ salesData: sale })
         });
 
-        if (response.ok) {
-          const blob = await response.blob();
+        if (pdfResponse.ok) {
+          const blob = await pdfResponse.blob();
           const url = window.URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
-          a.download = \`sales-invoice-\${latestSalesData.salesNumber}.pdf\`;
+          a.download = \`sales-invoice-\${sale.salesNumber || Date.now()}.pdf\`;
           a.click();
           window.URL.revokeObjectURL(url);
         } else {
-          const errorData = await response.json();
+          const errorData = await pdfResponse.json();
           throw new Error(errorData.error || 'PDF generation failed');
         }
       } catch (error) {
@@ -2893,12 +2957,11 @@ function getStatementPage() {
 
     async function downloadReferenceReportPDF(id) {
       try {
-        const response = await fetch(\`/api/reference-reports/\${id}\`);
-        const report = await response.json();
-        
-        if (!report) {
+        const response = await fetch('/api/reference-reports/' + id);
+        if (!response.ok) {
           throw new Error('Reference report not found');
         }
+        const report = await response.json();
         
         const pdfResponse = await fetch('/generate-reference-report-pdf', {
           method: 'POST',
@@ -2925,7 +2988,7 @@ function getStatementPage() {
 
     async function downloadPurchasePDF(id) {
       try {
-        const response = await fetch(\`/api/purchases/\${id}\`);
+        const response = await fetch('/api/purchases/' + id);
         if (!response.ok) {
           throw new Error('Purchase not found');
         }
@@ -2956,7 +3019,7 @@ function getStatementPage() {
 
     async function downloadSalePDF(id) {
       try {
-        const response = await fetch(\`/api/sales/\${id}\`);
+        const response = await fetch('/api/sales/' + id);
         if (!response.ok) {
           throw new Error('Sale not found');
         }
@@ -3759,5 +3822,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('   ✅ FIXED: Purchase and Sales processing errors');
   console.log('   ✅ NEW: Delete buttons for purchase and sale history');
   console.log('   ✅ NEW: Fixed PDF download for latest purchase/sale in Statements');
-  console.log('   ✅ NEW: Automatic PDF button display after purchase/sale processing');
+  console.log('   ✅ NEW: Automatic PDF download after purchase/sale processing');
+  console.log('   ✅ FIXED: "Purchase not found" error in PDF download');
+  console.log('   ✅ FIXED: JSON parsing error for reference report PDF');
 });
