@@ -396,8 +396,22 @@ app.post('/api/purchases', async (req, res) => {
 
 app.get('/api/purchases', async (req, res) => {
   try {
-    const purchases = await db.collection('purchases').find({}).toArray();
+    const purchases = await db.collection('purchases').find({}).sort({ createdAt: -1 }).toArray();
     res.json(purchases);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/purchases/:id', async (req, res) => {
+  try {
+    const result = await db.collection('purchases').deleteOne({ _id: new ObjectId(req.params.id) });
+    
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: 'Purchase not found' });
+    }
+    
+    res.json({ message: 'Purchase deleted successfully' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -453,7 +467,7 @@ app.post('/api/sales', async (req, res) => {
 
 app.get('/api/sales', async (req, res) => {
   try {
-    const sales = await db.collection('sales').find({}).toArray();
+    const sales = await db.collection('sales').find({}).sort({ createdAt: -1 }).toArray();
     res.json(sales);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -469,6 +483,20 @@ app.get('/api/sales/:id', async (req, res) => {
     }
     
     res.json(sale);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/sales/:id', async (req, res) => {
+  try {
+    const result = await db.collection('sales').deleteOne({ _id: new ObjectId(req.params.id) });
+    
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: 'Sale not found' });
+    }
+    
+    res.json({ message: 'Sale deleted successfully' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -2212,7 +2240,7 @@ function getPurchasePage() {
   <script>
     let selectedPurchaseItems = [];
     let availableItems = [];
-    let currentPurchaseData = null;
+    let latestPurchaseData = null;
 
     async function loadAvailableItems() {
       try {
@@ -2310,8 +2338,6 @@ function getPurchasePage() {
 
     function clearPurchase() {
       selectedPurchaseItems = [];
-      currentPurchaseData = null;
-      document.getElementById('downloadPdf').style.display = 'none';
       updatePurchaseDisplay();
     }
 
@@ -2338,10 +2364,10 @@ function getPurchasePage() {
         const data = await response.json();
         
         if (response.ok) {
-          currentPurchaseData = data.purchaseData;
+          latestPurchaseData = data.purchaseData;
           alert('Purchase processed successfully! Purchase Number: ' + data.purchaseNumber);
           document.getElementById('downloadPdf').style.display = 'inline-block';
-          clearPurchase(); // Clear after successful processing
+          clearPurchase(); // Clear items after successful processing
           loadAvailableItems(); // Refresh available items
         } else {
           alert('Failed to process purchase: ' + data.error);
@@ -2353,7 +2379,7 @@ function getPurchasePage() {
     }
 
     async function downloadPurchasePDF() {
-      if (!currentPurchaseData) {
+      if (!latestPurchaseData) {
         alert('Please process a purchase first!');
         return;
       }
@@ -2362,7 +2388,7 @@ function getPurchasePage() {
         const response = await fetch('/generate-purchase-pdf', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ purchaseData: currentPurchaseData })
+          body: JSON.stringify({ purchaseData: latestPurchaseData })
         });
 
         if (response.ok) {
@@ -2370,7 +2396,7 @@ function getPurchasePage() {
           const url = window.URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
-          a.download = \`purchase-order-\${currentPurchaseData.purchaseNumber}.pdf\`;
+          a.download = \`purchase-order-\${latestPurchaseData.purchaseNumber}.pdf\`;
           a.click();
           window.URL.revokeObjectURL(url);
         } else {
@@ -2457,7 +2483,7 @@ function getSalesPage() {
   <script>
     let selectedSalesItems = [];
     let availableItems = [];
-    let currentSalesData = null;
+    let latestSalesData = null;
 
     async function loadAvailableItems() {
       try {
@@ -2560,8 +2586,6 @@ function getSalesPage() {
 
     function clearSale() {
       selectedSalesItems = [];
-      currentSalesData = null;
-      document.getElementById('downloadPdf').style.display = 'none';
       updateSalesDisplay();
     }
 
@@ -2588,9 +2612,8 @@ function getSalesPage() {
         const data = await response.json();
         
         if (response.ok) {
-          currentSalesData = data.salesData;
+          latestSalesData = data.salesData;
           alert('Sale processed successfully! Sales Number: ' + data.salesNumber);
-          // Show download button after successful sale processing
           document.getElementById('downloadPdf').style.display = 'inline-block';
           clearSale(); // Clear items after successful processing
           loadAvailableItems(); // Refresh available items
@@ -2604,7 +2627,7 @@ function getSalesPage() {
     }
 
     async function downloadSalesPDF() {
-      if (!currentSalesData) {
+      if (!latestSalesData) {
         alert('Please process a sale first!');
         return;
       }
@@ -2613,7 +2636,7 @@ function getSalesPage() {
         const response = await fetch('/generate-sales-pdf', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ salesData: currentSalesData })
+          body: JSON.stringify({ salesData: latestSalesData })
         });
 
         if (response.ok) {
@@ -2621,7 +2644,7 @@ function getSalesPage() {
           const url = window.URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
-          a.download = \`sales-invoice-\${currentSalesData.salesNumber}.pdf\`;
+          a.download = \`sales-invoice-\${latestSalesData.salesNumber}.pdf\`;
           a.click();
           window.URL.revokeObjectURL(url);
         } else {
@@ -2752,7 +2775,7 @@ function getStatementPage() {
                   <small>Items: \${report.items?.length || 0} | Total: RM \${(report.total || 0).toFixed(2)}</small>
                 </div>
                 <div>
-                  <button class="btn small" onclick="downloadReferenceReportPDF('\${report.reportNumber}', \${index})">📥 PDF</button>
+                  <button class="btn small" onclick="downloadReferenceReportPDF('\${report._id}')">📥 PDF</button>
                   <button class="btn small danger" onclick="deleteReferenceReport('\${report._id}')">🗑️ Delete</button>
                 </div>
               </div>
@@ -2788,7 +2811,8 @@ function getStatementPage() {
                   <small>Items: \${purchase.items?.length || 0} | Total: RM \${(purchase.total || 0).toFixed(2)}</small>
                 </div>
                 <div>
-                  <button class="btn small" onclick="downloadPurchasePDF('\${purchase._id}', \${index})">📥 PDF</button>
+                  <button class="btn small" onclick="downloadPurchasePDF('\${purchase._id}')">📥 PDF</button>
+                  <button class="btn small danger" onclick="deletePurchase('\${purchase._id}')">🗑️ Delete</button>
                 </div>
               </div>
             \`;
@@ -2823,7 +2847,8 @@ function getStatementPage() {
                   <small>Items: \${sale.items?.length || 0} | Total: RM \${(sale.total || 0).toFixed(2)}</small>
                 </div>
                 <div>
-                  <button class="btn small" onclick="downloadSalePDF('\${sale._id}', \${index})">📥 PDF</button>
+                  <button class="btn small" onclick="downloadSalePDF('\${sale._id}')">📥 PDF</button>
+                  <button class="btn small danger" onclick="deleteSale('\${sale._id}')">🗑️ Delete</button>
                 </div>
               </div>
             \`;
@@ -2866,93 +2891,94 @@ function getStatementPage() {
       }
     }
 
-    async function downloadReferenceReportPDF(reportNumber, index) {
+    async function downloadReferenceReportPDF(id) {
       try {
-        const response = await fetch('/api/reference-reports');
-        const reports = await response.json();
-        const report = reports[index];
+        const response = await fetch(\`/api/reference-reports/\${id}\`);
+        const report = await response.json();
         
-        if (report) {
-          const pdfResponse = await fetch('/generate-reference-report-pdf', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ referenceData: report })
-          });
+        if (!report) {
+          throw new Error('Reference report not found');
+        }
+        
+        const pdfResponse = await fetch('/generate-reference-report-pdf', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ referenceData: report })
+        });
 
-          if (pdfResponse.ok) {
-            const blob = await pdfResponse.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = \`reference-report-\${report.reportNumber || Date.now()}.pdf\`;
-            a.click();
-            window.URL.revokeObjectURL(url);
-          } else {
-            const errorData = await pdfResponse.json();
-            throw new Error(errorData.error || 'PDF generation failed');
-          }
+        if (pdfResponse.ok) {
+          const blob = await pdfResponse.blob();
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = \`reference-report-\${report.reportNumber || Date.now()}.pdf\`;
+          a.click();
+          window.URL.revokeObjectURL(url);
+        } else {
+          const errorData = await pdfResponse.json();
+          throw new Error(errorData.error || 'PDF generation failed');
         }
       } catch (error) {
         alert('Error downloading reference report PDF: ' + error.message);
       }
     }
 
-    async function downloadPurchasePDF(purchaseId, index) {
+    async function downloadPurchasePDF(id) {
       try {
-        const response = await fetch('/api/purchases');
-        const purchases = await response.json();
-        const purchase = purchases[index];
+        const response = await fetch(\`/api/purchases/\${id}\`);
+        if (!response.ok) {
+          throw new Error('Purchase not found');
+        }
+        const purchase = await response.json();
         
-        if (purchase) {
-          const pdfResponse = await fetch('/generate-purchase-pdf', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ purchaseData: purchase })
-          });
+        const pdfResponse = await fetch('/generate-purchase-pdf', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ purchaseData: purchase })
+        });
 
-          if (pdfResponse.ok) {
-            const blob = await pdfResponse.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = \`purchase-order-\${purchase.purchaseNumber || Date.now()}.pdf\`;
-            a.click();
-            window.URL.revokeObjectURL(url);
-          } else {
-            const errorData = await pdfResponse.json();
-            throw new Error(errorData.error || 'PDF generation failed');
-          }
+        if (pdfResponse.ok) {
+          const blob = await pdfResponse.blob();
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = \`purchase-order-\${purchase.purchaseNumber || Date.now()}.pdf\`;
+          a.click();
+          window.URL.revokeObjectURL(url);
+        } else {
+          const errorData = await pdfResponse.json();
+          throw new Error(errorData.error || 'PDF generation failed');
         }
       } catch (error) {
         alert('Error downloading purchase PDF: ' + error.message);
       }
     }
 
-    async function downloadSalePDF(saleId, index) {
+    async function downloadSalePDF(id) {
       try {
-        const response = await fetch('/api/sales');
-        const sales = await response.json();
-        const sale = sales[index];
+        const response = await fetch(\`/api/sales/\${id}\`);
+        if (!response.ok) {
+          throw new Error('Sale not found');
+        }
+        const sale = await response.json();
         
-        if (sale) {
-          const pdfResponse = await fetch('/generate-sales-pdf', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ salesData: sale })
-          });
+        const pdfResponse = await fetch('/generate-sales-pdf', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ salesData: sale })
+        });
 
-          if (pdfResponse.ok) {
-            const blob = await pdfResponse.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = \`sales-invoice-\${sale.salesNumber || Date.now()}.pdf\`;
-            a.click();
-            window.URL.revokeObjectURL(url);
-          } else {
-            const errorData = await pdfResponse.json();
-            throw new Error(errorData.error || 'PDF generation failed');
-          }
+        if (pdfResponse.ok) {
+          const blob = await pdfResponse.blob();
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = \`sales-invoice-\${sale.salesNumber || Date.now()}.pdf\`;
+          a.click();
+          window.URL.revokeObjectURL(url);
+        } else {
+          const errorData = await pdfResponse.json();
+          throw new Error(errorData.error || 'PDF generation failed');
         }
       } catch (error) {
         alert('Error downloading sales PDF: ' + error.message);
@@ -2990,6 +3016,40 @@ function getStatementPage() {
         }
       } catch (error) {
         alert('Error deleting reference report: ' + error.message);
+      }
+    }
+
+    async function deletePurchase(id) {
+      if (!confirm('Are you sure you want to delete this purchase record? This cannot be undone!')) return;
+
+      try {
+        const response = await fetch('/api/purchases/' + id, { method: 'DELETE' });
+        const data = await response.json();
+        
+        if (response.ok) {
+          loadPurchases();
+        } else {
+          alert('Failed to delete purchase: ' + data.error);
+        }
+      } catch (error) {
+        alert('Error deleting purchase: ' + error.message);
+      }
+    }
+
+    async function deleteSale(id) {
+      if (!confirm('Are you sure you want to delete this sale record? This cannot be undone!')) return;
+
+      try {
+        const response = await fetch('/api/sales/' + id, { method: 'DELETE' });
+        const data = await response.json();
+        
+        if (response.ok) {
+          loadSales();
+        } else {
+          alert('Failed to delete sale: ' + data.error);
+        }
+      } catch (error) {
+        alert('Error deleting sale: ' + error.message);
       }
     }
 
@@ -3697,4 +3757,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('   ✅ FIXED: Cannot read properties of undefined (reading "toString") errors');
   console.log('   ✅ FIXED: PDF generation errors with proper error handling');
   console.log('   ✅ FIXED: Purchase and Sales processing errors');
+  console.log('   ✅ NEW: Delete buttons for purchase and sale history');
+  console.log('   ✅ NEW: Fixed PDF download for latest purchase/sale in Statements');
+  console.log('   ✅ NEW: Automatic PDF button display after purchase/sale processing');
 });
