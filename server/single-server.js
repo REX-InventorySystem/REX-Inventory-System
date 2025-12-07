@@ -10,6 +10,52 @@ const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://Rex_Ho:931919@clus
 const VALID_SECURITY_CODE = "INV2025";
 
 let db;
+let invoiceCounter = 1;
+let purchaseCounter = 1;
+let salesCounter = 1;
+let statementCounter = 1;
+
+// Initialize counters on startup
+async function initializeCounters() {
+  try {
+    // Get the highest invoice number
+    const lastInvoice = await db.collection('invoices').find({}).sort({ invoiceNumber: -1 }).limit(1).toArray();
+    if (lastInvoice.length > 0 && lastInvoice[0].invoiceNumber) {
+      invoiceCounter = parseInt(lastInvoice[0].invoiceNumber) + 1;
+    }
+
+    // Get the highest purchase number
+    const lastPurchase = await db.collection('purchases').find({}).sort({ purchaseNumber: -1 }).limit(1).toArray();
+    if (lastPurchase.length > 0 && lastPurchase[0].purchaseNumber) {
+      purchaseCounter = parseInt(lastPurchase[0].purchaseNumber) + 1;
+    }
+
+    // Get the highest sales number
+    const lastSale = await db.collection('sales').find({}).sort({ salesNumber: -1 }).limit(1).toArray();
+    if (lastSale.length > 0 && lastSale[0].salesNumber) {
+      salesCounter = parseInt(lastSale[0].salesNumber) + 1;
+    }
+
+    // Get the highest statement number
+    const lastStatement = await db.collection('statements').find({}).sort({ statementNumber: -1 }).limit(1).toArray();
+    if (lastStatement.length > 0 && lastStatement[0].statementNumber) {
+      statementCounter = parseInt(lastStatement[0].statementNumber) + 1;
+    }
+
+    console.log('Counters initialized:');
+    console.log(`Invoice Counter: ${invoiceCounter}`);
+    console.log(`Purchase Counter: ${purchaseCounter}`);
+    console.log(`Sales Counter: ${salesCounter}`);
+    console.log(`Statement Counter: ${statementCounter}`);
+  } catch (error) {
+    console.error('Error initializing counters:', error);
+  }
+}
+
+// Helper function to format numbers with leading zeros
+function formatNumber(number, length = 13) {
+  return number.toString().padStart(length, '0');
+}
 
 // Middleware
 app.use(express.json());
@@ -55,7 +101,13 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'Server is running', 
     timestamp: new Date().toISOString(),
-    database: db ? 'Connected' : 'Disconnected'
+    database: db ? 'Connected' : 'Disconnected',
+    counters: {
+      invoice: invoiceCounter,
+      purchase: purchaseCounter,
+      sales: salesCounter,
+      statement: statementCounter
+    }
   });
 });
 
@@ -79,6 +131,9 @@ async function connectDB() {
         }
       }
     }
+
+    // Initialize counters after DB connection
+    await initializeCounters();
   } catch (error) {
     console.error('❌ MongoDB connection failed:', error);
   }
@@ -254,7 +309,7 @@ app.delete('/api/inventory/:id', async (req, res) => {
 // Statements/Reports APIs
 app.get('/api/statements', async (req, res) => {
   try {
-    const statements = await db.collection('statements').find({}).toArray();
+    const statements = await db.collection('statements').find({}).sort({ statementNumber: -1 }).toArray();
     res.json(statements);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -263,11 +318,20 @@ app.get('/api/statements', async (req, res) => {
 
 app.post('/api/statements/add', async (req, res) => {
   try {
-    await db.collection('statements').insertOne({
+    const statementNumber = formatNumber(statementCounter++);
+    const reportData = {
       ...req.body.reportData,
+      statementNumber: statementNumber,
+      referenceNumber: `REF-${statementNumber}`,
       createdAt: new Date()
+    };
+    
+    await db.collection('statements').insertOne(reportData);
+    res.json({ 
+      message: 'Report saved successfully',
+      statementNumber: statementNumber,
+      referenceNumber: reportData.referenceNumber
     });
-    res.json({ message: 'Report saved successfully' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -290,11 +354,20 @@ app.delete('/api/statements/:id', async (req, res) => {
 // Invoices APIs
 app.post('/api/invoices', async (req, res) => {
   try {
-    await db.collection('invoices').insertOne({
+    const invoiceNumber = formatNumber(invoiceCounter++);
+    const invoiceData = {
       ...req.body.invoiceData,
+      invoiceNumber: invoiceNumber,
+      referenceNumber: `REF-${invoiceNumber}`,
       createdAt: new Date()
+    };
+    
+    await db.collection('invoices').insertOne(invoiceData);
+    res.json({ 
+      message: 'Invoice saved successfully',
+      invoiceNumber: invoiceNumber,
+      referenceNumber: invoiceData.referenceNumber
     });
-    res.json({ message: 'Invoice saved successfully' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -302,7 +375,7 @@ app.post('/api/invoices', async (req, res) => {
 
 app.get('/api/invoices', async (req, res) => {
   try {
-    const invoices = await db.collection('invoices').find({}).toArray();
+    const invoices = await db.collection('invoices').find({}).sort({ invoiceNumber: -1 }).toArray();
     res.json(invoices);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -326,8 +399,11 @@ app.delete('/api/invoices/:id', async (req, res) => {
 // Purchase APIs
 app.post('/api/purchases', async (req, res) => {
   try {
+    const purchaseNumber = formatNumber(purchaseCounter++);
     const purchaseData = {
       ...req.body.purchaseData,
+      purchaseNumber: purchaseNumber,
+      referenceNumber: `PUR-${purchaseNumber}`,
       type: 'purchase',
       createdAt: new Date()
     };
@@ -347,7 +423,11 @@ app.post('/api/purchases', async (req, res) => {
       }
     }
     
-    res.json({ message: 'Purchase recorded successfully' });
+    res.json({ 
+      message: 'Purchase recorded successfully',
+      purchaseNumber: purchaseNumber,
+      referenceNumber: purchaseData.referenceNumber
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -355,7 +435,7 @@ app.post('/api/purchases', async (req, res) => {
 
 app.get('/api/purchases', async (req, res) => {
   try {
-    const purchases = await db.collection('purchases').find({}).toArray();
+    const purchases = await db.collection('purchases').find({}).sort({ purchaseNumber: -1 }).toArray();
     res.json(purchases);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -365,8 +445,11 @@ app.get('/api/purchases', async (req, res) => {
 // Sales APIs
 app.post('/api/sales', async (req, res) => {
   try {
+    const salesNumber = formatNumber(salesCounter++);
     const salesData = {
       ...req.body.salesData,
+      salesNumber: salesNumber,
+      referenceNumber: `SAL-${salesNumber}`,
       type: 'sale',
       createdAt: new Date()
     };
@@ -390,7 +473,11 @@ app.post('/api/sales', async (req, res) => {
       }
     }
     
-    res.json({ message: 'Sale recorded successfully' });
+    res.json({ 
+      message: 'Sale recorded successfully',
+      salesNumber: salesNumber,
+      referenceNumber: salesData.referenceNumber
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -398,7 +485,7 @@ app.post('/api/sales', async (req, res) => {
 
 app.get('/api/sales', async (req, res) => {
   try {
-    const sales = await db.collection('sales').find({}).toArray();
+    const sales = await db.collection('sales').find({}).sort({ salesNumber: -1 }).toArray();
     res.json(sales);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -451,13 +538,18 @@ app.delete('/api/user', async (req, res) => {
   }
 });
 
-// PDF Generation APIs with Professional Layout
+// PDF Generation APIs with Professional Layout (Single Page)
 app.post('/generate-invoice-pdf', (req, res) => {
   try {
     const { invoiceData } = req.body;
     
-    const doc = new PDFDocument({ margin: 50 });
-    const filename = 'invoice-' + Date.now() + '.pdf';
+    const doc = new PDFDocument({ 
+      margin: 50,
+      size: 'A4',
+      layout: 'portrait'
+    });
+    
+    const filename = `invoice-${invoiceData.referenceNumber || invoiceData.id}.pdf`;
     
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Type', 'application/pdf');
@@ -491,21 +583,28 @@ app.post('/generate-invoice-pdf', (req, res) => {
     
     // Invoice details in two columns
     const leftColumn = 50;
-    const rightColumn = 300;
+    const rightColumn = 350;
     
     doc.fillColor('#1e293b')
        .fontSize(12)
-       .text('Invoice ID:', leftColumn, doc.y, { continued: true })
+       .text('Invoice Number:', leftColumn, doc.y, { continued: true })
        .fillColor('#64748b')
-       .text(` ${invoiceData.id || 'N/A'}`)
+       .text(` ${invoiceData.invoiceNumber || invoiceData.id}`)
        
        .fillColor('#1e293b')
+       .text('Reference Number:', leftColumn, doc.y + 20, { continued: true })
+       .fillColor('#3b82f6')
+       .font('Helvetica-Bold')
+       .text(` ${invoiceData.referenceNumber || 'REF-' + (invoiceData.invoiceNumber || invoiceData.id)}`)
+       
+       .fillColor('#1e293b')
+       .font('Helvetica')
        .text('Invoice Date:', leftColumn, doc.y + 20, { continued: true })
        .fillColor('#64748b')
        .text(` ${invoiceData.date || new Date().toLocaleDateString()}`)
        
        .fillColor('#1e293b')
-       .text('Generated By:', rightColumn, doc.y - 40, { continued: true })
+       .text('Generated By:', rightColumn, doc.y - 60, { continued: true })
        .fillColor('#64748b')
        .text(' Inventory System');
     
@@ -521,47 +620,55 @@ app.post('/generate-invoice-pdf', (req, res) => {
        .fontSize(10)
        .font('Helvetica-Bold')
        .text('Item Description', 55, tableTop + 8)
+       .text('SKU', 250, tableTop + 8)
        .text('Qty', 350, tableTop + 8)
        .text('Unit Price', 400, tableTop + 8)
        .text('Total', 470, tableTop + 8);
     
     let yPosition = tableTop + 35;
+    let total = 0;
+    let itemCount = 0;
     
-    // Invoice items
-    invoiceData.items.forEach((item, index) => {
-      if (yPosition > 700) {
-        doc.addPage();
-        yPosition = 50;
-      }
-      
+    // Invoice items - limit to fit on one page
+    const maxItemsPerPage = 15; // Adjusted to fit on one page
+    const itemsToShow = invoiceData.items.slice(0, maxItemsPerPage);
+    
+    itemsToShow.forEach((item, index) => {
       const itemTotal = item.invoiceQty * item.unitPrice;
+      total += itemTotal;
+      itemCount++;
+      
       const isEven = index % 2 === 0;
       
       // Alternate row colors
       if (isEven) {
         doc.fillColor('#f8fafc')
-           .rect(50, yPosition - 5, 500, 30)
+           .rect(50, yPosition - 5, 500, 20)
            .fill();
       }
       
       doc.fillColor('#1e293b')
          .font('Helvetica')
          .fontSize(9)
-         .text(item.name, 55, yPosition)
+         .text(item.name.length > 25 ? item.name.substring(0, 22) + '...' : item.name, 55, yPosition)
+         .text(item.sku, 250, yPosition)
          .text(item.invoiceQty.toString(), 350, yPosition)
          .text(`RM ${item.unitPrice.toFixed(2)}`, 400, yPosition)
          .text(`RM ${itemTotal.toFixed(2)}`, 470, yPosition);
       
-      // Item details
-      doc.fillColor('#64748b')
-         .fontSize(7)
-         .text(`SKU: ${item.sku} | Category: ${item.category}`, 55, yPosition + 12);
-      
-      yPosition += 30;
+      yPosition += 20;
     });
     
+    // Show note if items were truncated
+    if (invoiceData.items.length > maxItemsPerPage) {
+      doc.fillColor('#ef4444')
+         .fontSize(8)
+         .text(`Note: Showing ${maxItemsPerPage} of ${invoiceData.items.length} items. Some items truncated for single-page display.`, 55, yPosition + 5);
+      yPosition += 15;
+    }
+    
     // Total section
-    const totalY = Math.max(yPosition + 20, 650);
+    const totalY = Math.min(yPosition + 20, 650);
     doc.moveTo(350, totalY)
        .lineTo(550, totalY)
        .strokeColor('#e2e8f0')
@@ -573,7 +680,12 @@ app.post('/generate-invoice-pdf', (req, res) => {
        .font('Helvetica-Bold')
        .text('Grand Total:', 350, totalY + 10, { continued: true })
        .fillColor('#3b82f6')
-       .text(` RM ${invoiceData.total.toFixed(2)}`, { align: 'right' });
+       .text(` RM ${total.toFixed(2)}`, { align: 'right' });
+    
+    // Summary
+    doc.fillColor('#64748b')
+       .fontSize(9)
+       .text(`Items: ${itemCount}`, 50, totalY + 40);
     
     // Footer
     doc.y = 750;
@@ -595,8 +707,13 @@ app.post('/generate-purchase-pdf', (req, res) => {
   try {
     const { purchaseData } = req.body;
     
-    const doc = new PDFDocument({ margin: 50 });
-    const filename = 'purchase-order-' + Date.now() + '.pdf';
+    const doc = new PDFDocument({ 
+      margin: 50,
+      size: 'A4',
+      layout: 'portrait'
+    });
+    
+    const filename = `purchase-order-${purchaseData.referenceNumber || purchaseData.id}.pdf`;
     
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Type', 'application/pdf');
@@ -629,21 +746,28 @@ app.post('/generate-purchase-pdf', (req, res) => {
     
     // Purchase details
     const leftColumn = 50;
-    const rightColumn = 300;
+    const rightColumn = 350;
     
     doc.fillColor('#1e293b')
        .fontSize(11)
-       .text('Purchase ID:', leftColumn, doc.y, { continued: true })
+       .text('Purchase Number:', leftColumn, doc.y, { continued: true })
        .fillColor('#64748b')
-       .text(` ${purchaseData.id || 'N/A'}`)
+       .text(` ${purchaseData.purchaseNumber || purchaseData.id}`)
        
        .fillColor('#1e293b')
+       .text('Reference Number:', leftColumn, doc.y + 20, { continued: true })
+       .fillColor('#10b981')
+       .font('Helvetica-Bold')
+       .text(` ${purchaseData.referenceNumber || 'PUR-' + (purchaseData.purchaseNumber || purchaseData.id)}`)
+       
+       .fillColor('#1e293b')
+       .font('Helvetica')
        .text('Order Date:', leftColumn, doc.y + 20, { continued: true })
        .fillColor('#64748b')
        .text(` ${purchaseData.date || new Date().toLocaleDateString()}`)
        
        .fillColor('#1e293b')
-       .text('Supplier:', rightColumn, doc.y - 40, { continued: true })
+       .text('Supplier:', rightColumn, doc.y - 60, { continued: true })
        .fillColor('#64748b')
        .text(` ${purchaseData.supplier || 'N/A'}`);
     
@@ -666,39 +790,48 @@ app.post('/generate-purchase-pdf', (req, res) => {
     
     let yPosition = tableTop + 35;
     let totalCost = 0;
+    let itemCount = 0;
     
-    // Purchase items
-    purchaseData.items.forEach((item, index) => {
-      if (yPosition > 700) {
-        doc.addPage();
-        yPosition = 50;
-      }
-      
+    // Purchase items - limit to fit on one page
+    const maxItemsPerPage = 18;
+    const itemsToShow = purchaseData.items.slice(0, maxItemsPerPage);
+    
+    itemsToShow.forEach((item, index) => {
       const itemTotal = item.quantity * item.unitCost;
       totalCost += itemTotal;
+      itemCount++;
+      
       const isEven = index % 2 === 0;
       
       // Alternate row colors
       if (isEven) {
         doc.fillColor('#f8fafc')
-           .rect(50, yPosition - 5, 500, 25)
+           .rect(50, yPosition - 5, 500, 20)
            .fill();
       }
       
       doc.fillColor('#1e293b')
          .font('Helvetica')
          .fontSize(9)
-         .text(item.name, 55, yPosition)
+         .text(item.name.length > 25 ? item.name.substring(0, 22) + '...' : item.name, 55, yPosition)
          .text(item.sku, 200, yPosition)
          .text(item.quantity.toString(), 300, yPosition)
          .text(`RM ${item.unitCost.toFixed(2)}`, 350, yPosition)
          .text(`RM ${itemTotal.toFixed(2)}`, 450, yPosition);
       
-      yPosition += 25;
+      yPosition += 20;
     });
     
+    // Show note if items were truncated
+    if (purchaseData.items.length > maxItemsPerPage) {
+      doc.fillColor('#ef4444')
+         .fontSize(8)
+         .text(`Note: Showing ${maxItemsPerPage} of ${purchaseData.items.length} items. Some items truncated for single-page display.`, 55, yPosition + 5);
+      yPosition += 15;
+    }
+    
     // Total section
-    const totalY = Math.max(yPosition + 20, 650);
+    const totalY = Math.min(yPosition + 20, 650);
     doc.moveTo(350, totalY)
        .lineTo(550, totalY)
        .strokeColor('#e2e8f0')
@@ -711,6 +844,11 @@ app.post('/generate-purchase-pdf', (req, res) => {
        .text('Total Cost:', 350, totalY + 10, { continued: true })
        .fillColor('#10b981')
        .text(` RM ${totalCost.toFixed(2)}`, { align: 'right' });
+    
+    // Summary
+    doc.fillColor('#64748b')
+       .fontSize(9)
+       .text(`Items: ${itemCount}`, 50, totalY + 40);
     
     // Footer
     doc.y = 750;
@@ -731,8 +869,13 @@ app.post('/generate-sales-pdf', (req, res) => {
   try {
     const { salesData } = req.body;
     
-    const doc = new PDFDocument({ margin: 50 });
-    const filename = 'sales-invoice-' + Date.now() + '.pdf';
+    const doc = new PDFDocument({ 
+      margin: 50,
+      size: 'A4',
+      layout: 'portrait'
+    });
+    
+    const filename = `sales-invoice-${salesData.referenceNumber || salesData.id}.pdf`;
     
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Type', 'application/pdf');
@@ -765,21 +908,28 @@ app.post('/generate-sales-pdf', (req, res) => {
     
     // Sales details
     const leftColumn = 50;
-    const rightColumn = 300;
+    const rightColumn = 350;
     
     doc.fillColor('#1e293b')
        .fontSize(11)
-       .text('Sales ID:', leftColumn, doc.y, { continued: true })
+       .text('Sales Number:', leftColumn, doc.y, { continued: true })
        .fillColor('#64748b')
-       .text(` ${salesData.id || 'N/A'}`)
+       .text(` ${salesData.salesNumber || salesData.id}`)
        
        .fillColor('#1e293b')
+       .text('Reference Number:', leftColumn, doc.y + 20, { continued: true })
+       .fillColor('#ef4444')
+       .font('Helvetica-Bold')
+       .text(` ${salesData.referenceNumber || 'SAL-' + (salesData.salesNumber || salesData.id)}`)
+       
+       .fillColor('#1e293b')
+       .font('Helvetica')
        .text('Sale Date:', leftColumn, doc.y + 20, { continued: true })
        .fillColor('#64748b')
        .text(` ${salesData.date || new Date().toLocaleDateString()}`)
        
        .fillColor('#1e293b')
-       .text('Customer:', rightColumn, doc.y - 40, { continued: true })
+       .text('Customer:', rightColumn, doc.y - 60, { continued: true })
        .fillColor('#64748b')
        .text(` ${salesData.customer || 'N/A'}`);
     
@@ -801,38 +951,49 @@ app.post('/generate-sales-pdf', (req, res) => {
        .text('Total', 450, tableTop + 8);
     
     let yPosition = tableTop + 35;
+    let total = 0;
+    let itemCount = 0;
     
-    // Sales items
-    salesData.items.forEach((item, index) => {
-      if (yPosition > 700) {
-        doc.addPage();
-        yPosition = 50;
-      }
-      
+    // Sales items - limit to fit on one page
+    const maxItemsPerPage = 18;
+    const itemsToShow = salesData.items.slice(0, maxItemsPerPage);
+    
+    itemsToShow.forEach((item, index) => {
       const itemTotal = item.quantity * item.unitPrice;
+      total += itemTotal;
+      itemCount++;
+      
       const isEven = index % 2 === 0;
       
       // Alternate row colors
       if (isEven) {
         doc.fillColor('#f8fafc')
-           .rect(50, yPosition - 5, 500, 25)
+           .rect(50, yPosition - 5, 500, 20)
            .fill();
       }
       
       doc.fillColor('#1e293b')
          .font('Helvetica')
          .fontSize(9)
-         .text(item.name, 55, yPosition)
+         .text(item.name.length > 25 ? item.name.substring(0, 22) + '...' : item.name, 55, yPosition)
          .text(item.sku, 200, yPosition)
          .text(item.quantity.toString(), 300, yPosition)
          .text(`RM ${item.unitPrice.toFixed(2)}`, 350, yPosition)
          .text(`RM ${itemTotal.toFixed(2)}`, 450, yPosition);
       
-      yPosition += 25;
+      yPosition += 20;
     });
     
+    // Show note if items were truncated
+    if (salesData.items.length > maxItemsPerPage) {
+      doc.fillColor('#ef4444')
+         .fontSize(8)
+         .text(`Note: Showing ${maxItemsPerPage} of ${salesData.items.length} items. Some items truncated for single-page display.`, 55, yPosition + 5);
+      yPosition += 15;
+    }
+    
     // Total section
-    const totalY = Math.max(yPosition + 20, 650);
+    const totalY = Math.min(yPosition + 20, 650);
     doc.moveTo(350, totalY)
        .lineTo(550, totalY)
        .strokeColor('#e2e8f0')
@@ -844,7 +1005,12 @@ app.post('/generate-sales-pdf', (req, res) => {
        .font('Helvetica-Bold')
        .text('Grand Total:', 350, totalY + 10, { continued: true })
        .fillColor('#ef4444')
-       .text(` RM ${salesData.total.toFixed(2)}`, { align: 'right' });
+       .text(` RM ${salesData.total ? salesData.total.toFixed(2) : total.toFixed(2)}`, { align: 'right' });
+    
+    // Summary
+    doc.fillColor('#64748b')
+       .fontSize(9)
+       .text(`Items: ${itemCount}`, 50, totalY + 40);
     
     // Footer
     doc.y = 750;
@@ -866,8 +1032,13 @@ app.post('/generate-inventory-report-pdf', (req, res) => {
   try {
     const { reportData } = req.body;
     
-    const doc = new PDFDocument({ margin: 50 });
-    const filename = 'inventory-report-' + Date.now() + '.pdf';
+    const doc = new PDFDocument({ 
+      margin: 50,
+      size: 'A4',
+      layout: 'portrait'
+    });
+    
+    const filename = `inventory-report-${reportData.referenceNumber || reportData.id}.pdf`;
     
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Type', 'application/pdf');
@@ -900,15 +1071,22 @@ app.post('/generate-inventory-report-pdf', (req, res) => {
     
     // Report details
     const leftColumn = 50;
-    const rightColumn = 300;
+    const rightColumn = 350;
     
     doc.fillColor('#1e293b')
        .fontSize(11)
-       .text('Report ID:', leftColumn, doc.y, { continued: true })
+       .text('Report Number:', leftColumn, doc.y, { continued: true })
        .fillColor('#64748b')
-       .text(` ${reportData.id}`)
+       .text(` ${reportData.statementNumber || reportData.id}`)
        
        .fillColor('#1e293b')
+       .text('Reference Number:', leftColumn, doc.y + 20, { continued: true })
+       .fillColor('#06b6d4')
+       .font('Helvetica-Bold')
+       .text(` ${reportData.referenceNumber || 'REF-' + (reportData.statementNumber || reportData.id)}`)
+       
+       .fillColor('#1e293b')
+       .font('Helvetica')
        .text('Generated:', leftColumn, doc.y + 20, { continued: true })
        .fillColor('#64748b')
        .text(` ${reportData.date}`)
@@ -953,32 +1131,11 @@ app.post('/generate-inventory-report-pdf', (req, res) => {
     let totalPotentialValue = 0;
     let totalItems = 0;
     
-    // Inventory items
-    reportData.items.forEach((item, index) => {
-      if (yPosition > 700) {
-        doc.addPage();
-        yPosition = 50;
-        
-        // Add table header on new page
-        doc.fillColor('#ffffff')
-           .rect(50, yPosition, 500, 25)
-           .fill('#06b6d4');
-        
-        doc.fillColor('#ffffff')
-           .fontSize(9)
-           .font('Helvetica-Bold')
-           .text('#', 55, yPosition + 8)
-           .text('SKU', 70, yPosition + 8)
-           .text('Product Name', 120, yPosition + 8)
-           .text('Category', 220, yPosition + 8)
-           .text('Stock', 300, yPosition + 8)
-           .text('Cost', 340, yPosition + 8)
-           .text('Price', 390, yPosition + 8)
-           .text('Value', 450, yPosition + 8);
-        
-        yPosition += 35;
-      }
-      
+    // Inventory items - limit to fit on one page
+    const maxItemsPerPage = 20;
+    const itemsToShow = reportData.items.slice(0, maxItemsPerPage);
+    
+    itemsToShow.forEach((item, index) => {
       const inventoryValue = item.quantity * item.unitCost;
       const potentialValue = item.quantity * item.unitPrice;
       totalInventoryValue += inventoryValue;
@@ -990,7 +1147,7 @@ app.post('/generate-inventory-report-pdf', (req, res) => {
       // Alternate row colors
       if (isEven) {
         doc.fillColor('#f8fafc')
-           .rect(50, yPosition - 5, 500, 20)
+           .rect(50, yPosition - 5, 500, 18)
            .fill();
       }
       
@@ -999,18 +1156,26 @@ app.post('/generate-inventory-report-pdf', (req, res) => {
          .fontSize(8)
          .text((index + 1).toString(), 55, yPosition)
          .text(item.sku, 70, yPosition)
-         .text(item.name.length > 25 ? item.name.substring(0, 22) + '...' : item.name, 120, yPosition)
-         .text(item.category.length > 15 ? item.category.substring(0, 12) + '...' : item.category, 220, yPosition)
+         .text(item.name.length > 20 ? item.name.substring(0, 18) + '...' : item.name, 120, yPosition)
+         .text(item.category.length > 12 ? item.category.substring(0, 10) + '...' : item.category, 220, yPosition)
          .text(item.quantity.toString(), 300, yPosition)
          .text(`RM ${item.unitCost.toFixed(2)}`, 340, yPosition)
          .text(`RM ${item.unitPrice.toFixed(2)}`, 390, yPosition)
          .text(`RM ${inventoryValue.toFixed(2)}`, 450, yPosition);
       
-      yPosition += 20;
+      yPosition += 18;
     });
     
+    // Show note if items were truncated
+    if (reportData.items.length > maxItemsPerPage) {
+      doc.fillColor('#ef4444')
+         .fontSize(8)
+         .text(`Note: Showing ${maxItemsPerPage} of ${reportData.items.length} items. Some items truncated for single-page display.`, 55, yPosition + 5);
+      yPosition += 15;
+    }
+    
     // Summary section
-    const summaryY = Math.max(yPosition + 30, 650);
+    const summaryY = Math.min(yPosition + 30, 650);
     
     // Summary box
     doc.fillColor('#f8fafc')
@@ -1031,7 +1196,7 @@ app.post('/generate-inventory-report-pdf', (req, res) => {
        .font('Helvetica')
        .text('Total Items in Report:', 55, summaryY + 35, { continued: true })
        .fillColor('#1e293b')
-       .text(` ${reportData.items.length} products`)
+       .text(` ${itemsToShow.length} products`)
        
        .fillColor('#64748b')
        .text('Total Stock Quantity:', 55, summaryY + 50, { continued: true })
@@ -1725,33 +1890,42 @@ function getDashboardPage() {
           totalPotentialValue: \`RM \${totalPotentialValue.toFixed(2)}\`
         };
 
-        await fetch('/api/statements/add', {
+        const saveResponse = await fetch('/api/statements/add', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ reportData })
         });
 
-        const pdfResponse = await fetch('/generate-inventory-report-pdf', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reportData })
-        });
+        const saveData = await saveResponse.json();
+        
+        if (saveResponse.ok) {
+          reportData.referenceNumber = saveData.referenceNumber;
+          reportData.statementNumber = saveData.statementNumber;
+          
+          const pdfResponse = await fetch('/generate-inventory-report-pdf', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reportData })
+          });
 
-        if (pdfResponse.ok) {
-          const blob = await pdfResponse.blob();
-          const url = window.URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = \`inventory-report-\${reportData.id}.pdf\`;
-          a.click();
-          window.URL.revokeObjectURL(url);
-          alert('Inventory report generated and saved to statements!');
+          if (pdfResponse.ok) {
+            const blob = await pdfResponse.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = \`inventory-report-\${saveData.referenceNumber}.pdf\`;
+            a.click();
+            window.URL.revokeObjectURL(url);
+            alert('Inventory report generated and saved to statements!');
+          } else {
+            throw new Error('PDF generation failed');
+          }
         } else {
-          throw new Error('PDF generation failed');
+          throw new Error('Failed to save report: ' + saveData.error);
         }
       } catch (error) {
         console.error('Download report error:', error);
-        alert('Error generating PDF report.');
+        alert('Error generating PDF report: ' + error.message);
       }
     }
 
@@ -1831,7 +2005,7 @@ function getPurchasePage() {
   <script>
     let selectedPurchaseItems = [];
     let availableItems = [];
-    let currentPurchaseId = null;
+    let currentPurchaseData = null;
 
     async function loadAvailableItems() {
       try {
@@ -1929,8 +2103,9 @@ function getPurchasePage() {
 
     function clearPurchase() {
       selectedPurchaseItems = [];
-      currentPurchaseId = null;
+      currentPurchaseData = null;
       document.getElementById('downloadPdf').style.display = 'none';
+      document.getElementById('supplier').value = '';
       updatePurchaseDisplay();
     }
 
@@ -1941,9 +2116,8 @@ function getPurchasePage() {
       }
 
       try {
-        currentPurchaseId = 'PUR-' + Date.now();
         const purchaseData = {
-          id: currentPurchaseId,
+          id: 'PUR-' + Date.now(),
           date: document.getElementById('purchaseDate').value || new Date().toLocaleString(),
           supplier: document.getElementById('supplier').value || 'N/A',
           items: selectedPurchaseItems,
@@ -1960,6 +2134,11 @@ function getPurchasePage() {
         
         if (response.ok) {
           alert('Purchase processed successfully! Inventory updated.');
+          currentPurchaseData = {
+            ...purchaseData,
+            purchaseNumber: data.purchaseNumber,
+            referenceNumber: data.referenceNumber
+          };
           document.getElementById('downloadPdf').style.display = 'inline-block';
           loadAvailableItems();
         } else {
@@ -1971,24 +2150,16 @@ function getPurchasePage() {
     }
 
     async function downloadPurchasePDF() {
-      if (!currentPurchaseId) {
+      if (!currentPurchaseData) {
         alert('Please process a purchase first!');
         return;
       }
-
-      const purchaseData = {
-        id: currentPurchaseId,
-        date: document.getElementById('purchaseDate').value || new Date().toLocaleString(),
-        supplier: document.getElementById('supplier').value || 'N/A',
-        items: selectedPurchaseItems,
-        total: parseFloat(document.getElementById('purchaseTotal').textContent)
-      };
 
       try {
         const response = await fetch('/generate-purchase-pdf', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ purchaseData })
+          body: JSON.stringify({ purchaseData: currentPurchaseData })
         });
 
         if (response.ok) {
@@ -1996,7 +2167,7 @@ function getPurchasePage() {
           const url = window.URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
-          a.download = \`purchase-order-\${purchaseData.id}.pdf\`;
+          a.download = \`purchase-order-\${currentPurchaseData.referenceNumber}.pdf\`;
           a.click();
           window.URL.revokeObjectURL(url);
         } else {
@@ -2082,7 +2253,7 @@ function getSalesPage() {
   <script>
     let selectedSalesItems = [];
     let availableItems = [];
-    let currentSalesId = null;
+    let currentSalesData = null;
 
     async function loadAvailableItems() {
       try {
@@ -2187,8 +2358,9 @@ function getSalesPage() {
 
     function clearSale() {
       selectedSalesItems = [];
-      currentSalesId = null;
+      currentSalesData = null;
       document.getElementById('downloadPdf').style.display = 'none';
+      document.getElementById('customer').value = '';
       updateSalesDisplay();
     }
 
@@ -2199,9 +2371,8 @@ function getSalesPage() {
       }
 
       try {
-        currentSalesId = 'SAL-' + Date.now();
         const salesData = {
-          id: currentSalesId,
+          id: 'SAL-' + Date.now(),
           date: document.getElementById('salesDate').value || new Date().toLocaleString(),
           customer: document.getElementById('customer').value || 'N/A',
           items: selectedSalesItems,
@@ -2218,9 +2389,17 @@ function getSalesPage() {
         
         if (response.ok) {
           alert('Sale processed successfully! Inventory updated.');
-          // Show download button only after successful sale processing
+          // Store the sales data with reference numbers
+          currentSalesData = {
+            ...salesData,
+            salesNumber: data.salesNumber,
+            referenceNumber: data.referenceNumber
+          };
+          // Show download button after successful sale processing
           document.getElementById('downloadPdf').style.display = 'inline-block';
-          clearSale();
+          // Clear the form for next sale
+          selectedSalesItems = [];
+          updateSalesDisplay();
           loadAvailableItems();
         } else {
           alert('Failed to process sale: ' + data.error);
@@ -2231,24 +2410,16 @@ function getSalesPage() {
     }
 
     async function downloadSalesPDF() {
-      if (!currentSalesId) {
+      if (!currentSalesData) {
         alert('Please process a sale first!');
         return;
       }
-
-      const salesData = {
-        id: currentSalesId,
-        date: document.getElementById('salesDate').value || new Date().toLocaleString(),
-        customer: document.getElementById('customer').value || 'N/A',
-        items: selectedSalesItems,
-        total: parseFloat(document.getElementById('salesTotal').textContent)
-      };
 
       try {
         const response = await fetch('/generate-sales-pdf', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ salesData })
+          body: JSON.stringify({ salesData: currentSalesData })
         });
 
         if (response.ok) {
@@ -2256,7 +2427,7 @@ function getSalesPage() {
           const url = window.URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
-          a.download = \`sales-invoice-\${salesData.id}.pdf\`;
+          a.download = \`sales-invoice-\${currentSalesData.referenceNumber}.pdf\`;
           a.click();
           window.URL.revokeObjectURL(url);
         } else {
@@ -2333,6 +2504,7 @@ function getInvoicePage() {
   <script>
     let selectedItems = [];
     let availableItems = [];
+    let currentInvoiceData = null;
 
     async function loadAvailableItems() {
       try {
@@ -2428,6 +2600,7 @@ function getInvoicePage() {
 
     function clearInvoice() {
       selectedItems = [];
+      currentInvoiceData = null;
       updateInvoiceDisplay();
     }
 
@@ -2445,31 +2618,44 @@ function getInvoicePage() {
       };
 
       try {
-        const response = await fetch('/generate-invoice-pdf', {
+        // Save invoice to database first to get reference number
+        const saveResponse = await fetch('/api/invoices', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ invoiceData })
         });
 
-        if (response.ok) {
-          const blob = await response.blob();
-          const url = window.URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = \`invoice-\${invoiceData.id}.pdf\`;
-          a.click();
-          window.URL.revokeObjectURL(url);
+        const saveData = await saveResponse.json();
+        
+        if (saveResponse.ok) {
+          // Update invoice data with reference numbers
+          invoiceData.invoiceNumber = saveData.invoiceNumber;
+          invoiceData.referenceNumber = saveData.referenceNumber;
+          currentInvoiceData = invoiceData;
           
-          // Save invoice to database
-          await fetch('/api/invoices', {
+          // Generate PDF
+          const response = await fetch('/generate-invoice-pdf', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ invoiceData })
           });
-          
-          alert('Invoice PDF generated successfully!');
+
+          if (response.ok) {
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = \`invoice-\${saveData.referenceNumber}.pdf\`;
+            a.click();
+            window.URL.revokeObjectURL(url);
+            
+            alert('Invoice PDF generated successfully! Reference: ' + saveData.referenceNumber);
+            clearInvoice();
+          } else {
+            throw new Error('PDF generation failed');
+          }
         } else {
-          throw new Error('PDF generation failed');
+          throw new Error('Failed to save invoice: ' + saveData.error);
         }
       } catch (error) {
         alert('Error generating PDF: ' + error.message);
@@ -2544,7 +2730,6 @@ function getStatementPage() {
         if (statements.length === 0) {
           container.innerHTML = '<p>No reports generated yet.</p>';
         } else {
-          statements.sort((a, b) => new Date(b.date) - new Date(a.date));
           container.innerHTML = '';
           
           statements.forEach((report, index) => {
@@ -2553,12 +2738,12 @@ function getStatementPage() {
             reportDiv.innerHTML = \`
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                  <strong>\${report.id}</strong><br>
-                  <small>Generated: \${report.date}</small><br>
-                  <small>Items: \${report.items.length} | \${report.totalInventoryValue} | \${report.totalPotentialValue}</small>
+                  <strong>Ref: \${report.referenceNumber || report.id}</strong><br>
+                  <small>Number: \${report.statementNumber} | Generated: \${report.date}</small><br>
+                  <small>Items: \${report.items ? report.items.length : 0} | Date Range: \${report.dateRange || 'All Items'}</small>
                 </div>
                 <div>
-                  <button class="btn small" onclick="downloadReport(\${index})">📥 Download</button>
+                  <button class="btn small" onclick="downloadReport('\${report._id}', '\${report.referenceNumber || report.id}')">📥 Download</button>
                   <button class="btn small danger" onclick="deleteReport('\${report._id}')">🗑️ Delete</button>
                 </div>
               </div>
@@ -2580,7 +2765,6 @@ function getStatementPage() {
         if (purchases.length === 0) {
           container.innerHTML = '<p>No purchase history.</p>';
         } else {
-          purchases.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
           container.innerHTML = '';
           
           purchases.forEach((purchase, index) => {
@@ -2589,12 +2773,12 @@ function getStatementPage() {
             purchaseDiv.innerHTML = \`
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                  <strong>\${purchase.id}</strong><br>
-                  <small>Date: \${purchase.date} | Supplier: \${purchase.supplier}</small><br>
-                  <small>Items: \${purchase.items.length} | Total: RM \${purchase.total.toFixed(2)}</small>
+                  <strong>Ref: \${purchase.referenceNumber || purchase.id}</strong><br>
+                  <small>Number: \${purchase.purchaseNumber} | Date: \${purchase.date} | Supplier: \${purchase.supplier}</small><br>
+                  <small>Items: \${purchase.items.length} | Total: RM \${purchase.total ? purchase.total.toFixed(2) : '0.00'}</small>
                 </div>
                 <div>
-                  <button class="btn small" onclick="downloadPurchasePDF('\${purchase.id}', \${index})">📥 PDF</button>
+                  <button class="btn small" onclick="downloadPurchasePDF('\${purchase._id}', '\${purchase.referenceNumber || purchase.id}')">📥 PDF</button>
                 </div>
               </div>
             \`;
@@ -2615,7 +2799,6 @@ function getStatementPage() {
         if (sales.length === 0) {
           container.innerHTML = '<p>No sales history.</p>';
         } else {
-          sales.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
           container.innerHTML = '';
           
           sales.forEach((sale, index) => {
@@ -2624,12 +2807,12 @@ function getStatementPage() {
             saleDiv.innerHTML = \`
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                  <strong>\${sale.id}</strong><br>
-                  <small>Date: \${sale.date} | Customer: \${sale.customer}</small><br>
-                  <small>Items: \${sale.items.length} | Total: RM \${sale.total.toFixed(2)}</small>
+                  <strong>Ref: \${sale.referenceNumber || sale.id}</strong><br>
+                  <small>Number: \${sale.salesNumber} | Date: \${sale.date} | Customer: \${sale.customer}</small><br>
+                  <small>Items: \${sale.items.length} | Total: RM \${sale.total ? sale.total.toFixed(2) : '0.00'}</small>
                 </div>
                 <div>
-                  <button class="btn small" onclick="downloadSalesPDF('\${sale.id}', \${index})">📥 PDF</button>
+                  <button class="btn small" onclick="downloadSalesPDF('\${sale._id}', '\${sale.referenceNumber || sale.id}')">📥 PDF</button>
                 </div>
               </div>
             \`;
@@ -2650,7 +2833,6 @@ function getStatementPage() {
         if (invoices.length === 0) {
           container.innerHTML = '<p>No invoice history.</p>';
         } else {
-          invoices.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
           container.innerHTML = '';
           
           invoices.forEach((invoice, index) => {
@@ -2659,12 +2841,12 @@ function getStatementPage() {
             invoiceDiv.innerHTML = \`
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                  <strong>\${invoice.id}</strong><br>
-                  <small>Date: \${invoice.date}</small><br>
-                  <small>Items: \${invoice.items.length} | Total: RM \${invoice.total.toFixed(2)}</small>
+                  <strong>Ref: \${invoice.referenceNumber || invoice.id}</strong><br>
+                  <small>Number: \${invoice.invoiceNumber} | Date: \${invoice.date}</small><br>
+                  <small>Items: \${invoice.items.length} | Total: RM \${invoice.total ? invoice.total.toFixed(2) : '0.00'}</small>
                 </div>
                 <div>
-                  <button class="btn small" onclick="downloadInvoicePDF('\${invoice.id}', \${index})">📥 PDF</button>
+                  <button class="btn small" onclick="downloadInvoicePDF('\${invoice._id}', '\${invoice.referenceNumber || invoice.id}')">📥 PDF</button>
                   <button class="btn small danger" onclick="deleteInvoice('\${invoice._id}')">🗑️ Delete</button>
                 </div>
               </div>
@@ -2677,11 +2859,11 @@ function getStatementPage() {
       }
     }
 
-    async function downloadReport(index) {
+    async function downloadReport(id, referenceNumber) {
       try {
         const response = await fetch('/api/statements');
         const statements = await response.json();
-        const report = statements[index];
+        const report = statements.find(s => s._id === id);
         
         if (report) {
           const pdfResponse = await fetch('/generate-inventory-report-pdf', {
@@ -2695,9 +2877,11 @@ function getStatementPage() {
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = \`inventory-report-\${report.id}.pdf\`;
+            a.download = \`inventory-report-\${referenceNumber}.pdf\`;
             a.click();
             window.URL.revokeObjectURL(url);
+          } else {
+            alert('Failed to generate PDF');
           }
         }
       } catch (error) {
@@ -2705,11 +2889,11 @@ function getStatementPage() {
       }
     }
 
-    async function downloadPurchasePDF(purchaseId, index) {
+    async function downloadPurchasePDF(id, referenceNumber) {
       try {
         const response = await fetch('/api/purchases');
         const purchases = await response.json();
-        const purchase = purchases[index];
+        const purchase = purchases.find(p => p._id === id);
         
         if (purchase) {
           const pdfResponse = await fetch('/generate-purchase-pdf', {
@@ -2723,9 +2907,11 @@ function getStatementPage() {
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = \`purchase-order-\${purchase.id}.pdf\`;
+            a.download = \`purchase-order-\${referenceNumber}.pdf\`;
             a.click();
             window.URL.revokeObjectURL(url);
+          } else {
+            alert('Failed to generate PDF');
           }
         }
       } catch (error) {
@@ -2733,11 +2919,11 @@ function getStatementPage() {
       }
     }
 
-    async function downloadSalesPDF(salesId, index) {
+    async function downloadSalesPDF(id, referenceNumber) {
       try {
         const response = await fetch('/api/sales');
         const sales = await response.json();
-        const sale = sales[index];
+        const sale = sales.find(s => s._id === id);
         
         if (sale) {
           const pdfResponse = await fetch('/generate-sales-pdf', {
@@ -2751,9 +2937,11 @@ function getStatementPage() {
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = \`sales-invoice-\${sale.id}.pdf\`;
+            a.download = \`sales-invoice-\${referenceNumber}.pdf\`;
             a.click();
             window.URL.revokeObjectURL(url);
+          } else {
+            alert('Failed to generate PDF');
           }
         }
       } catch (error) {
@@ -2761,11 +2949,11 @@ function getStatementPage() {
       }
     }
 
-    async function downloadInvoicePDF(invoiceId, index) {
+    async function downloadInvoicePDF(id, referenceNumber) {
       try {
         const response = await fetch('/api/invoices');
         const invoices = await response.json();
-        const invoice = invoices[index];
+        const invoice = invoices.find(i => i._id === id);
         
         if (invoice) {
           const pdfResponse = await fetch('/generate-invoice-pdf', {
@@ -2779,9 +2967,11 @@ function getStatementPage() {
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = \`invoice-\${invoice.id}.pdf\`;
+            a.download = \`invoice-\${referenceNumber}.pdf\`;
             a.click();
             window.URL.revokeObjectURL(url);
+          } else {
+            alert('Failed to generate PDF');
           }
         }
       } catch (error) {
@@ -3523,4 +3713,12 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('   ✅ Preserved Inventory Data on Account Deletion');
   console.log('   ✅ Complete Multi-User System');
   console.log('   ✅ Enterprise-Level Inventory Management');
+  console.log('🆕 NEW UPDATES:');
+  console.log('   ✅ Invoice reference numbers (REF-0000000000001)');
+  console.log('   ✅ Purchase numbers (0000000000001) with REF-PUR prefix');
+  console.log('   ✅ Sales numbers (0000000000001) with REF-SAL prefix');
+  console.log('   ✅ Fixed statement sale invoice PDF download bug');
+  console.log('   ✅ All PDFs now single page with proper formatting');
+  console.log('   ✅ Fixed Process Sale button showing download PDF');
+  console.log('   ✅ Auto-incrementing counters for all document types');
 });
