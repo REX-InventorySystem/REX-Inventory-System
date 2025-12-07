@@ -10,52 +10,6 @@ const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://Rex_Ho:931919@clus
 const VALID_SECURITY_CODE = "INV2025";
 
 let db;
-let invoiceCounter = 1;
-let purchaseCounter = 1;
-let salesCounter = 1;
-let statementCounter = 1;
-
-// Initialize counters on startup
-async function initializeCounters() {
-  try {
-    // Get the highest invoice number
-    const lastInvoice = await db.collection('invoices').find({}).sort({ invoiceNumber: -1 }).limit(1).toArray();
-    if (lastInvoice.length > 0 && lastInvoice[0].invoiceNumber) {
-      invoiceCounter = parseInt(lastInvoice[0].invoiceNumber) + 1;
-    }
-
-    // Get the highest purchase number
-    const lastPurchase = await db.collection('purchases').find({}).sort({ purchaseNumber: -1 }).limit(1).toArray();
-    if (lastPurchase.length > 0 && lastPurchase[0].purchaseNumber) {
-      purchaseCounter = parseInt(lastPurchase[0].purchaseNumber) + 1;
-    }
-
-    // Get the highest sales number
-    const lastSale = await db.collection('sales').find({}).sort({ salesNumber: -1 }).limit(1).toArray();
-    if (lastSale.length > 0 && lastSale[0].salesNumber) {
-      salesCounter = parseInt(lastSale[0].salesNumber) + 1;
-    }
-
-    // Get the highest statement number
-    const lastStatement = await db.collection('statements').find({}).sort({ statementNumber: -1 }).limit(1).toArray();
-    if (lastStatement.length > 0 && lastStatement[0].statementNumber) {
-      statementCounter = parseInt(lastStatement[0].statementNumber) + 1;
-    }
-
-    console.log('Counters initialized:');
-    console.log(`Invoice Counter: ${invoiceCounter}`);
-    console.log(`Purchase Counter: ${purchaseCounter}`);
-    console.log(`Sales Counter: ${salesCounter}`);
-    console.log(`Statement Counter: ${statementCounter}`);
-  } catch (error) {
-    console.error('Error initializing counters:', error);
-  }
-}
-
-// Helper function to format numbers with leading zeros
-function formatNumber(number, length = 13) {
-  return number.toString().padStart(length, '0');
-}
 
 // Middleware
 app.use(express.json());
@@ -74,8 +28,8 @@ app.get('/', (req, res) => {
     case 'dashboard':
       htmlContent = getDashboardPage();
       break;
-    case 'invoice':
-      htmlContent = getInvoicePage();
+    case 'reference':
+      htmlContent = getReferencePage();
       break;
     case 'statement':
       htmlContent = getStatementPage();
@@ -101,15 +55,25 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'Server is running', 
     timestamp: new Date().toISOString(),
-    database: db ? 'Connected' : 'Disconnected',
-    counters: {
-      invoice: invoiceCounter,
-      purchase: purchaseCounter,
-      sales: salesCounter,
-      statement: statementCounter
-    }
+    database: db ? 'Connected' : 'Disconnected'
   });
 });
+
+// Counter for sequential numbers
+async function getNextSequence(collectionName) {
+  const counters = db.collection('counters');
+  
+  const result = await counters.findOneAndUpdate(
+    { _id: collectionName },
+    { $inc: { sequence_value: 1 } },
+    { 
+      upsert: true,
+      returnDocument: 'after'
+    }
+  );
+  
+  return result.sequence_value.toString().padStart(13, '0');
+}
 
 // Initialize MongoDB
 async function connectDB() {
@@ -120,7 +84,7 @@ async function connectDB() {
     console.log('✅ Connected to MongoDB');
     
     // Create collections if they don't exist
-    const collections = ['users', 'inventory', 'statements', 'invoices', 'purchases', 'sales', 'login_history'];
+    const collections = ['users', 'inventory', 'statements', 'reference_reports', 'purchases', 'sales', 'login_history', 'counters'];
     for (const collectionName of collections) {
       const collection = db.collection(collectionName);
       if (collectionName === 'users') {
@@ -131,9 +95,6 @@ async function connectDB() {
         }
       }
     }
-
-    // Initialize counters after DB connection
-    await initializeCounters();
   } catch (error) {
     console.error('❌ MongoDB connection failed:', error);
   }
@@ -306,40 +267,38 @@ app.delete('/api/inventory/:id', async (req, res) => {
   }
 });
 
-// Statements/Reports APIs
-app.get('/api/statements', async (req, res) => {
+// Reference Reports APIs (formerly invoices)
+app.get('/api/reference-reports', async (req, res) => {
   try {
-    const statements = await db.collection('statements').find({}).sort({ statementNumber: -1 }).toArray();
-    res.json(statements);
+    const referenceReports = await db.collection('reference_reports').find({}).toArray();
+    res.json(referenceReports);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.post('/api/statements/add', async (req, res) => {
+app.post('/api/reference-reports/add', async (req, res) => {
   try {
-    const statementNumber = formatNumber(statementCounter++);
-    const reportData = {
-      ...req.body.reportData,
-      statementNumber: statementNumber,
-      referenceNumber: `REF-${statementNumber}`,
+    const reportNumber = await getNextSequence('reference_reports');
+    const referenceReportData = {
+      ...req.body.referenceData,
+      reportNumber: `REF-${reportNumber}`,
       createdAt: new Date()
     };
     
-    await db.collection('statements').insertOne(reportData);
+    await db.collection('reference_reports').insertOne(referenceReportData);
     res.json({ 
-      message: 'Report saved successfully',
-      statementNumber: statementNumber,
-      referenceNumber: reportData.referenceNumber
+      message: 'Reference report saved successfully',
+      reportNumber: referenceReportData.reportNumber 
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.delete('/api/statements/:id', async (req, res) => {
+app.delete('/api/reference-reports/:id', async (req, res) => {
   try {
-    const result = await db.collection('statements').deleteOne({ _id: new ObjectId(req.params.id) });
+    const result = await db.collection('reference_reports').deleteOne({ _id: new ObjectId(req.params.id) });
     
     if (result.deletedCount === 0) {
       return res.status(404).json({ error: 'Report not found' });
@@ -351,59 +310,13 @@ app.delete('/api/statements/:id', async (req, res) => {
   }
 });
 
-// Invoices APIs
-app.post('/api/invoices', async (req, res) => {
-  try {
-    const invoiceNumber = formatNumber(invoiceCounter++);
-    const invoiceData = {
-      ...req.body.invoiceData,
-      invoiceNumber: invoiceNumber,
-      referenceNumber: `REF-${invoiceNumber}`,
-      createdAt: new Date()
-    };
-    
-    await db.collection('invoices').insertOne(invoiceData);
-    res.json({ 
-      message: 'Invoice saved successfully',
-      invoiceNumber: invoiceNumber,
-      referenceNumber: invoiceData.referenceNumber
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/invoices', async (req, res) => {
-  try {
-    const invoices = await db.collection('invoices').find({}).sort({ invoiceNumber: -1 }).toArray();
-    res.json(invoices);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.delete('/api/invoices/:id', async (req, res) => {
-  try {
-    const result = await db.collection('invoices').deleteOne({ _id: new ObjectId(req.params.id) });
-    
-    if (result.deletedCount === 0) {
-      return res.status(404).json({ error: 'Invoice not found' });
-    }
-    
-    res.json({ message: 'Invoice deleted successfully' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // Purchase APIs
 app.post('/api/purchases', async (req, res) => {
   try {
-    const purchaseNumber = formatNumber(purchaseCounter++);
+    const purchaseNumber = await getNextSequence('purchases');
     const purchaseData = {
       ...req.body.purchaseData,
-      purchaseNumber: purchaseNumber,
-      referenceNumber: `PUR-${purchaseNumber}`,
+      purchaseNumber: `PUR-${purchaseNumber}`,
       type: 'purchase',
       createdAt: new Date()
     };
@@ -425,8 +338,8 @@ app.post('/api/purchases', async (req, res) => {
     
     res.json({ 
       message: 'Purchase recorded successfully',
-      purchaseNumber: purchaseNumber,
-      referenceNumber: purchaseData.referenceNumber
+      purchaseNumber: purchaseData.purchaseNumber,
+      purchaseData: purchaseData
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -435,7 +348,7 @@ app.post('/api/purchases', async (req, res) => {
 
 app.get('/api/purchases', async (req, res) => {
   try {
-    const purchases = await db.collection('purchases').find({}).sort({ purchaseNumber: -1 }).toArray();
+    const purchases = await db.collection('purchases').find({}).toArray();
     res.json(purchases);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -445,16 +358,15 @@ app.get('/api/purchases', async (req, res) => {
 // Sales APIs
 app.post('/api/sales', async (req, res) => {
   try {
-    const salesNumber = formatNumber(salesCounter++);
+    const salesNumber = await getNextSequence('sales');
     const salesData = {
       ...req.body.salesData,
-      salesNumber: salesNumber,
-      referenceNumber: `SAL-${salesNumber}`,
+      salesNumber: `SAL-${salesNumber}`,
       type: 'sale',
       createdAt: new Date()
     };
     
-    await db.collection('sales').insertOne(salesData);
+    const result = await db.collection('sales').insertOne(salesData);
     
     // Update inventory quantities
     for (const item of salesData.items) {
@@ -475,8 +387,9 @@ app.post('/api/sales', async (req, res) => {
     
     res.json({ 
       message: 'Sale recorded successfully',
-      salesNumber: salesNumber,
-      referenceNumber: salesData.referenceNumber
+      salesNumber: salesData.salesNumber,
+      salesData: salesData,
+      id: result.insertedId
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -485,8 +398,58 @@ app.post('/api/sales', async (req, res) => {
 
 app.get('/api/sales', async (req, res) => {
   try {
-    const sales = await db.collection('sales').find({}).sort({ salesNumber: -1 }).toArray();
+    const sales = await db.collection('sales').find({}).toArray();
     res.json(sales);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/sales/:id', async (req, res) => {
+  try {
+    const sale = await db.collection('sales').findOne({ _id: new ObjectId(req.params.id) });
+    
+    if (!sale) {
+      return res.status(404).json({ error: 'Sale not found' });
+    }
+    
+    res.json(sale);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Statements/Reports APIs
+app.get('/api/statements', async (req, res) => {
+  try {
+    const statements = await db.collection('statements').find({}).toArray();
+    res.json(statements);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/statements/add', async (req, res) => {
+  try {
+    await db.collection('statements').insertOne({
+      ...req.body.reportData,
+      createdAt: new Date()
+    });
+    res.json({ message: 'Report saved successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/statements/:id', async (req, res) => {
+  try {
+    const result = await db.collection('statements').deleteOne({ _id: new ObjectId(req.params.id) });
+    
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: 'Report not found' });
+    }
+    
+    res.json({ message: 'Report deleted successfully' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -527,7 +490,7 @@ app.delete('/api/user', async (req, res) => {
     
     // Delete user's personal data only (not inventory data)
     await db.collection('statements').deleteMany({});
-    await db.collection('invoices').deleteMany({});
+    await db.collection('reference_reports').deleteMany({});
     await db.collection('purchases').deleteMany({});
     await db.collection('sales').deleteMany({});
     await db.collection('login_history').deleteMany({ username });
@@ -539,17 +502,16 @@ app.delete('/api/user', async (req, res) => {
 });
 
 // PDF Generation APIs with Professional Layout (Single Page)
-app.post('/generate-invoice-pdf', (req, res) => {
+app.post('/generate-reference-report-pdf', (req, res) => {
   try {
-    const { invoiceData } = req.body;
+    const { referenceData } = req.body;
     
     const doc = new PDFDocument({ 
       margin: 50,
-      size: 'A4',
-      layout: 'portrait'
+      size: 'A4'
     });
     
-    const filename = `invoice-${invoiceData.referenceNumber || invoiceData.id}.pdf`;
+    const filename = `reference-report-${referenceData.reportNumber || Date.now()}.pdf`;
     
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Type', 'application/pdf');
@@ -559,7 +521,7 @@ app.post('/generate-invoice-pdf', (req, res) => {
     // Header with company info
     doc.fillColor('#3b82f6')
        .fontSize(24)
-       .text('INVOICE', { align: 'center' });
+       .text('REFERENCE REPORT', { align: 'center' });
     
     doc.moveDown(0.5);
     
@@ -581,30 +543,25 @@ app.post('/generate-invoice-pdf', (req, res) => {
     
     doc.moveDown(1);
     
-    // Invoice details in two columns
+    // Reference details in two columns
     const leftColumn = 50;
-    const rightColumn = 350;
+    const rightColumn = 300;
     
     doc.fillColor('#1e293b')
        .fontSize(12)
-       .text('Invoice Number:', leftColumn, doc.y, { continued: true })
-       .fillColor('#64748b')
-       .text(` ${invoiceData.invoiceNumber || invoiceData.id}`)
-       
-       .fillColor('#1e293b')
-       .text('Reference Number:', leftColumn, doc.y + 20, { continued: true })
+       .text('Reference Number:', leftColumn, doc.y, { continued: true })
        .fillColor('#3b82f6')
        .font('Helvetica-Bold')
-       .text(` ${invoiceData.referenceNumber || 'REF-' + (invoiceData.invoiceNumber || invoiceData.id)}`)
+       .text(` ${referenceData.reportNumber || 'REF-N/A'}`)
        
        .fillColor('#1e293b')
        .font('Helvetica')
-       .text('Invoice Date:', leftColumn, doc.y + 20, { continued: true })
+       .text('Report Date:', leftColumn, doc.y + 20, { continued: true })
        .fillColor('#64748b')
-       .text(` ${invoiceData.date || new Date().toLocaleDateString()}`)
+       .text(` ${referenceData.date || new Date().toLocaleDateString()}`)
        
        .fillColor('#1e293b')
-       .text('Generated By:', rightColumn, doc.y - 60, { continued: true })
+       .text('Generated By:', rightColumn, doc.y - 40, { continued: true })
        .fillColor('#64748b')
        .text(' Inventory System');
     
@@ -620,51 +577,49 @@ app.post('/generate-invoice-pdf', (req, res) => {
        .fontSize(10)
        .font('Helvetica-Bold')
        .text('Item Description', 55, tableTop + 8)
-       .text('SKU', 250, tableTop + 8)
+       .text('SKU', 200, tableTop + 8)
        .text('Qty', 350, tableTop + 8)
        .text('Unit Price', 400, tableTop + 8)
        .text('Total', 470, tableTop + 8);
     
     let yPosition = tableTop + 35;
-    let total = 0;
-    let itemCount = 0;
+    let itemsPerPage = 15; // Limit items to fit on one page
     
-    // Invoice items - limit to fit on one page
-    const maxItemsPerPage = 15; // Adjusted to fit on one page
-    const itemsToShow = invoiceData.items.slice(0, maxItemsPerPage);
-    
-    itemsToShow.forEach((item, index) => {
+    // Reference items
+    referenceData.items.slice(0, itemsPerPage).forEach((item, index) => {
       const itemTotal = item.invoiceQty * item.unitPrice;
-      total += itemTotal;
-      itemCount++;
-      
       const isEven = index % 2 === 0;
       
       // Alternate row colors
       if (isEven) {
         doc.fillColor('#f8fafc')
-           .rect(50, yPosition - 5, 500, 20)
+           .rect(50, yPosition - 5, 500, 30)
            .fill();
       }
       
       doc.fillColor('#1e293b')
          .font('Helvetica')
          .fontSize(9)
-         .text(item.name.length > 25 ? item.name.substring(0, 22) + '...' : item.name, 55, yPosition)
-         .text(item.sku, 250, yPosition)
+         .text(item.name, 55, yPosition)
+         .text(item.sku, 200, yPosition)
          .text(item.invoiceQty.toString(), 350, yPosition)
          .text(`RM ${item.unitPrice.toFixed(2)}`, 400, yPosition)
          .text(`RM ${itemTotal.toFixed(2)}`, 470, yPosition);
       
-      yPosition += 20;
+      // Item details
+      doc.fillColor('#64748b')
+         .fontSize(7)
+         .text(`Category: ${item.category}`, 55, yPosition + 12);
+      
+      yPosition += 30;
     });
     
-    // Show note if items were truncated
-    if (invoiceData.items.length > maxItemsPerPage) {
+    // If too many items, add note
+    if (referenceData.items.length > itemsPerPage) {
       doc.fillColor('#ef4444')
-         .fontSize(8)
-         .text(`Note: Showing ${maxItemsPerPage} of ${invoiceData.items.length} items. Some items truncated for single-page display.`, 55, yPosition + 5);
-      yPosition += 15;
+         .fontSize(9)
+         .text(`* Showing first ${itemsPerPage} items only for single-page PDF`, 50, yPosition + 10);
+      yPosition += 20;
     }
     
     // Total section
@@ -680,25 +635,20 @@ app.post('/generate-invoice-pdf', (req, res) => {
        .font('Helvetica-Bold')
        .text('Grand Total:', 350, totalY + 10, { continued: true })
        .fillColor('#3b82f6')
-       .text(` RM ${total.toFixed(2)}`, { align: 'right' });
-    
-    // Summary
-    doc.fillColor('#64748b')
-       .fontSize(9)
-       .text(`Items: ${itemCount}`, 50, totalY + 40);
+       .text(` RM ${referenceData.total.toFixed(2)}`, { align: 'right' });
     
     // Footer
-    doc.y = 750;
+    const footerY = Math.min(totalY + 50, 700);
+    doc.y = footerY;
     doc.fillColor('#64748b')
        .fontSize(8)
-       .text('Thank you for your business!', { align: 'center' })
-       .text('This is a computer-generated invoice. No signature required.', { align: 'center' })
+       .text('This is a computer-generated reference report for internal use.', { align: 'center' })
        .text(`Generated on: ${new Date().toLocaleString()} | Inventory Management System v2.0`, { align: 'center' });
     
     doc.end();
     
   } catch (error) {
-    console.error('PDF generation error:', error);
+    console.error('Reference PDF generation error:', error);
     res.status(500).json({ error: 'Failed to generate PDF' });
   }
 });
@@ -709,11 +659,10 @@ app.post('/generate-purchase-pdf', (req, res) => {
     
     const doc = new PDFDocument({ 
       margin: 50,
-      size: 'A4',
-      layout: 'portrait'
+      size: 'A4'
     });
     
-    const filename = `purchase-order-${purchaseData.referenceNumber || purchaseData.id}.pdf`;
+    const filename = `purchase-order-${purchaseData.purchaseNumber || Date.now()}.pdf`;
     
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Type', 'application/pdf');
@@ -746,19 +695,14 @@ app.post('/generate-purchase-pdf', (req, res) => {
     
     // Purchase details
     const leftColumn = 50;
-    const rightColumn = 350;
+    const rightColumn = 300;
     
     doc.fillColor('#1e293b')
        .fontSize(11)
        .text('Purchase Number:', leftColumn, doc.y, { continued: true })
-       .fillColor('#64748b')
-       .text(` ${purchaseData.purchaseNumber || purchaseData.id}`)
-       
-       .fillColor('#1e293b')
-       .text('Reference Number:', leftColumn, doc.y + 20, { continued: true })
        .fillColor('#10b981')
        .font('Helvetica-Bold')
-       .text(` ${purchaseData.referenceNumber || 'PUR-' + (purchaseData.purchaseNumber || purchaseData.id)}`)
+       .text(` ${purchaseData.purchaseNumber || 'PUR-N/A'}`)
        
        .fillColor('#1e293b')
        .font('Helvetica')
@@ -767,7 +711,7 @@ app.post('/generate-purchase-pdf', (req, res) => {
        .text(` ${purchaseData.date || new Date().toLocaleDateString()}`)
        
        .fillColor('#1e293b')
-       .text('Supplier:', rightColumn, doc.y - 60, { continued: true })
+       .text('Supplier:', rightColumn, doc.y - 40, { continued: true })
        .fillColor('#64748b')
        .text(` ${purchaseData.supplier || 'N/A'}`);
     
@@ -790,44 +734,39 @@ app.post('/generate-purchase-pdf', (req, res) => {
     
     let yPosition = tableTop + 35;
     let totalCost = 0;
-    let itemCount = 0;
+    let itemsPerPage = 15;
     
-    // Purchase items - limit to fit on one page
-    const maxItemsPerPage = 18;
-    const itemsToShow = purchaseData.items.slice(0, maxItemsPerPage);
-    
-    itemsToShow.forEach((item, index) => {
+    // Purchase items
+    purchaseData.items.slice(0, itemsPerPage).forEach((item, index) => {
       const itemTotal = item.quantity * item.unitCost;
       totalCost += itemTotal;
-      itemCount++;
-      
       const isEven = index % 2 === 0;
       
       // Alternate row colors
       if (isEven) {
         doc.fillColor('#f8fafc')
-           .rect(50, yPosition - 5, 500, 20)
+           .rect(50, yPosition - 5, 500, 25)
            .fill();
       }
       
       doc.fillColor('#1e293b')
          .font('Helvetica')
          .fontSize(9)
-         .text(item.name.length > 25 ? item.name.substring(0, 22) + '...' : item.name, 55, yPosition)
+         .text(item.name, 55, yPosition)
          .text(item.sku, 200, yPosition)
          .text(item.quantity.toString(), 300, yPosition)
          .text(`RM ${item.unitCost.toFixed(2)}`, 350, yPosition)
          .text(`RM ${itemTotal.toFixed(2)}`, 450, yPosition);
       
-      yPosition += 20;
+      yPosition += 25;
     });
     
-    // Show note if items were truncated
-    if (purchaseData.items.length > maxItemsPerPage) {
+    // If too many items, add note
+    if (purchaseData.items.length > itemsPerPage) {
       doc.fillColor('#ef4444')
-         .fontSize(8)
-         .text(`Note: Showing ${maxItemsPerPage} of ${purchaseData.items.length} items. Some items truncated for single-page display.`, 55, yPosition + 5);
-      yPosition += 15;
+         .fontSize(9)
+         .text(`* Showing first ${itemsPerPage} items only for single-page PDF`, 50, yPosition + 10);
+      yPosition += 20;
     }
     
     // Total section
@@ -845,13 +784,9 @@ app.post('/generate-purchase-pdf', (req, res) => {
        .fillColor('#10b981')
        .text(` RM ${totalCost.toFixed(2)}`, { align: 'right' });
     
-    // Summary
-    doc.fillColor('#64748b')
-       .fontSize(9)
-       .text(`Items: ${itemCount}`, 50, totalY + 40);
-    
     // Footer
-    doc.y = 750;
+    const footerY = Math.min(totalY + 50, 700);
+    doc.y = footerY;
     doc.fillColor('#64748b')
        .fontSize(8)
        .text('Purchase Order - Inventory Management System', { align: 'center' })
@@ -871,11 +806,10 @@ app.post('/generate-sales-pdf', (req, res) => {
     
     const doc = new PDFDocument({ 
       margin: 50,
-      size: 'A4',
-      layout: 'portrait'
+      size: 'A4'
     });
     
-    const filename = `sales-invoice-${salesData.referenceNumber || salesData.id}.pdf`;
+    const filename = `sales-invoice-${salesData.salesNumber || Date.now()}.pdf`;
     
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Type', 'application/pdf');
@@ -908,19 +842,14 @@ app.post('/generate-sales-pdf', (req, res) => {
     
     // Sales details
     const leftColumn = 50;
-    const rightColumn = 350;
+    const rightColumn = 300;
     
     doc.fillColor('#1e293b')
        .fontSize(11)
        .text('Sales Number:', leftColumn, doc.y, { continued: true })
-       .fillColor('#64748b')
-       .text(` ${salesData.salesNumber || salesData.id}`)
-       
-       .fillColor('#1e293b')
-       .text('Reference Number:', leftColumn, doc.y + 20, { continued: true })
        .fillColor('#ef4444')
        .font('Helvetica-Bold')
-       .text(` ${salesData.referenceNumber || 'SAL-' + (salesData.salesNumber || salesData.id)}`)
+       .text(` ${salesData.salesNumber || 'SAL-N/A'}`)
        
        .fillColor('#1e293b')
        .font('Helvetica')
@@ -929,7 +858,7 @@ app.post('/generate-sales-pdf', (req, res) => {
        .text(` ${salesData.date || new Date().toLocaleDateString()}`)
        
        .fillColor('#1e293b')
-       .text('Customer:', rightColumn, doc.y - 60, { continued: true })
+       .text('Customer:', rightColumn, doc.y - 40, { continued: true })
        .fillColor('#64748b')
        .text(` ${salesData.customer || 'N/A'}`);
     
@@ -951,45 +880,38 @@ app.post('/generate-sales-pdf', (req, res) => {
        .text('Total', 450, tableTop + 8);
     
     let yPosition = tableTop + 35;
-    let total = 0;
-    let itemCount = 0;
+    let itemsPerPage = 15;
     
-    // Sales items - limit to fit on one page
-    const maxItemsPerPage = 18;
-    const itemsToShow = salesData.items.slice(0, maxItemsPerPage);
-    
-    itemsToShow.forEach((item, index) => {
+    // Sales items
+    salesData.items.slice(0, itemsPerPage).forEach((item, index) => {
       const itemTotal = item.quantity * item.unitPrice;
-      total += itemTotal;
-      itemCount++;
-      
       const isEven = index % 2 === 0;
       
       // Alternate row colors
       if (isEven) {
         doc.fillColor('#f8fafc')
-           .rect(50, yPosition - 5, 500, 20)
+           .rect(50, yPosition - 5, 500, 25)
            .fill();
       }
       
       doc.fillColor('#1e293b')
          .font('Helvetica')
          .fontSize(9)
-         .text(item.name.length > 25 ? item.name.substring(0, 22) + '...' : item.name, 55, yPosition)
+         .text(item.name, 55, yPosition)
          .text(item.sku, 200, yPosition)
          .text(item.quantity.toString(), 300, yPosition)
          .text(`RM ${item.unitPrice.toFixed(2)}`, 350, yPosition)
          .text(`RM ${itemTotal.toFixed(2)}`, 450, yPosition);
       
-      yPosition += 20;
+      yPosition += 25;
     });
     
-    // Show note if items were truncated
-    if (salesData.items.length > maxItemsPerPage) {
+    // If too many items, add note
+    if (salesData.items.length > itemsPerPage) {
       doc.fillColor('#ef4444')
-         .fontSize(8)
-         .text(`Note: Showing ${maxItemsPerPage} of ${salesData.items.length} items. Some items truncated for single-page display.`, 55, yPosition + 5);
-      yPosition += 15;
+         .fontSize(9)
+         .text(`* Showing first ${itemsPerPage} items only for single-page PDF`, 50, yPosition + 10);
+      yPosition += 20;
     }
     
     // Total section
@@ -1005,15 +927,11 @@ app.post('/generate-sales-pdf', (req, res) => {
        .font('Helvetica-Bold')
        .text('Grand Total:', 350, totalY + 10, { continued: true })
        .fillColor('#ef4444')
-       .text(` RM ${salesData.total ? salesData.total.toFixed(2) : total.toFixed(2)}`, { align: 'right' });
-    
-    // Summary
-    doc.fillColor('#64748b')
-       .fontSize(9)
-       .text(`Items: ${itemCount}`, 50, totalY + 40);
+       .text(` RM ${salesData.total.toFixed(2)}`, { align: 'right' });
     
     // Footer
-    doc.y = 750;
+    const footerY = Math.min(totalY + 50, 700);
+    doc.y = footerY;
     doc.fillColor('#64748b')
        .fontSize(8)
        .text('Thank you for your purchase!', { align: 'center' })
@@ -1034,11 +952,10 @@ app.post('/generate-inventory-report-pdf', (req, res) => {
     
     const doc = new PDFDocument({ 
       margin: 50,
-      size: 'A4',
-      layout: 'portrait'
+      size: 'A4'
     });
     
-    const filename = `inventory-report-${reportData.referenceNumber || reportData.id}.pdf`;
+    const filename = `inventory-report-${reportData.id || Date.now()}.pdf`;
     
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Type', 'application/pdf');
@@ -1071,22 +988,15 @@ app.post('/generate-inventory-report-pdf', (req, res) => {
     
     // Report details
     const leftColumn = 50;
-    const rightColumn = 350;
+    const rightColumn = 300;
     
     doc.fillColor('#1e293b')
        .fontSize(11)
-       .text('Report Number:', leftColumn, doc.y, { continued: true })
+       .text('Report ID:', leftColumn, doc.y, { continued: true })
        .fillColor('#64748b')
-       .text(` ${reportData.statementNumber || reportData.id}`)
+       .text(` ${reportData.id}`)
        
        .fillColor('#1e293b')
-       .text('Reference Number:', leftColumn, doc.y + 20, { continued: true })
-       .fillColor('#06b6d4')
-       .font('Helvetica-Bold')
-       .text(` ${reportData.referenceNumber || 'REF-' + (reportData.statementNumber || reportData.id)}`)
-       
-       .fillColor('#1e293b')
-       .font('Helvetica')
        .text('Generated:', leftColumn, doc.y + 20, { continued: true })
        .fillColor('#64748b')
        .text(` ${reportData.date}`)
@@ -1130,12 +1040,10 @@ app.post('/generate-inventory-report-pdf', (req, res) => {
     let totalInventoryValue = 0;
     let totalPotentialValue = 0;
     let totalItems = 0;
+    let itemsPerPage = 20;
     
-    // Inventory items - limit to fit on one page
-    const maxItemsPerPage = 20;
-    const itemsToShow = reportData.items.slice(0, maxItemsPerPage);
-    
-    itemsToShow.forEach((item, index) => {
+    // Inventory items
+    reportData.items.slice(0, itemsPerPage).forEach((item, index) => {
       const inventoryValue = item.quantity * item.unitCost;
       const potentialValue = item.quantity * item.unitPrice;
       totalInventoryValue += inventoryValue;
@@ -1147,7 +1055,7 @@ app.post('/generate-inventory-report-pdf', (req, res) => {
       // Alternate row colors
       if (isEven) {
         doc.fillColor('#f8fafc')
-           .rect(50, yPosition - 5, 500, 18)
+           .rect(50, yPosition - 5, 500, 20)
            .fill();
       }
       
@@ -1156,22 +1064,22 @@ app.post('/generate-inventory-report-pdf', (req, res) => {
          .fontSize(8)
          .text((index + 1).toString(), 55, yPosition)
          .text(item.sku, 70, yPosition)
-         .text(item.name.length > 20 ? item.name.substring(0, 18) + '...' : item.name, 120, yPosition)
-         .text(item.category.length > 12 ? item.category.substring(0, 10) + '...' : item.category, 220, yPosition)
+         .text(item.name.length > 25 ? item.name.substring(0, 22) + '...' : item.name, 120, yPosition)
+         .text(item.category.length > 15 ? item.category.substring(0, 12) + '...' : item.category, 220, yPosition)
          .text(item.quantity.toString(), 300, yPosition)
          .text(`RM ${item.unitCost.toFixed(2)}`, 340, yPosition)
          .text(`RM ${item.unitPrice.toFixed(2)}`, 390, yPosition)
          .text(`RM ${inventoryValue.toFixed(2)}`, 450, yPosition);
       
-      yPosition += 18;
+      yPosition += 20;
     });
     
-    // Show note if items were truncated
-    if (reportData.items.length > maxItemsPerPage) {
+    // If too many items, add note
+    if (reportData.items.length > itemsPerPage) {
       doc.fillColor('#ef4444')
-         .fontSize(8)
-         .text(`Note: Showing ${maxItemsPerPage} of ${reportData.items.length} items. Some items truncated for single-page display.`, 55, yPosition + 5);
-      yPosition += 15;
+         .fontSize(9)
+         .text(`* Showing first ${itemsPerPage} items only for single-page PDF`, 50, yPosition + 10);
+      yPosition += 20;
     }
     
     // Summary section
@@ -1196,7 +1104,7 @@ app.post('/generate-inventory-report-pdf', (req, res) => {
        .font('Helvetica')
        .text('Total Items in Report:', 55, summaryY + 35, { continued: true })
        .fillColor('#1e293b')
-       .text(` ${itemsToShow.length} products`)
+       .text(` ${reportData.items.length} products`)
        
        .fillColor('#64748b')
        .text('Total Stock Quantity:', 55, summaryY + 50, { continued: true })
@@ -1249,7 +1157,7 @@ function getLoginPage() {
     <div class="auth-header">
       <div class="logo">📦</div>
       <h1 class="main-title">INVENTORY SYSTEM</h1>
-      <h2 class="sub-title">WITH INVOICE SYSTEM</h2>
+      <h2 class="sub-title">WITH REFERENCE SYSTEM</h2>
       <p class="tagline">Complete Inventory Management Solution</p>
     </div>
     
@@ -1277,8 +1185,8 @@ function getLoginPage() {
         <span>Inventory Management</span>
       </div>
       <div class="feature">
-        <span class="feature-icon">🧾</span>
-        <span>Invoice Generation</span>
+        <span class="feature-icon">📋</span>
+        <span>Reference Reports</span>
       </div>
       <div class="feature">
         <span class="feature-icon">📈</span>
@@ -1341,7 +1249,7 @@ function getRegisterPage() {
     <div class="auth-header">
       <div class="logo">📦</div>
       <h1 class="main-title">INVENTORY SYSTEM</h1>
-      <h2 class="sub-title">WITH INVOICE SYSTEM</h2>
+      <h2 class="sub-title">WITH REFERENCE SYSTEM</h2>
       <p class="tagline">Complete Inventory Management Solution</p>
     </div>
     
@@ -1495,8 +1403,8 @@ function getDashboardPage() {
           <button class="btn" onclick="downloadInventoryReport()">📊 Download Report</button>
           <a href="/?page=purchase" class="btn primary">📥 Purchase</a>
           <a href="/?page=sales" class="btn success">📤 Sales</a>
-          <a href="/?page=invoice" class="btn info">📄 Invoice</a>
-          <a href="/?page=statement" class="btn">📋 Statement</a>
+          <a href="/?page=reference" class="btn info">📋 Reference Report</a>
+          <a href="/?page=statement" class="btn">📑 Statement</a>
         </div>
       </div>
 
@@ -1890,42 +1798,33 @@ function getDashboardPage() {
           totalPotentialValue: \`RM \${totalPotentialValue.toFixed(2)}\`
         };
 
-        const saveResponse = await fetch('/api/statements/add', {
+        await fetch('/api/statements/add', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ reportData })
         });
 
-        const saveData = await saveResponse.json();
-        
-        if (saveResponse.ok) {
-          reportData.referenceNumber = saveData.referenceNumber;
-          reportData.statementNumber = saveData.statementNumber;
-          
-          const pdfResponse = await fetch('/generate-inventory-report-pdf', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ reportData })
-          });
+        const pdfResponse = await fetch('/generate-inventory-report-pdf', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reportData })
+        });
 
-          if (pdfResponse.ok) {
-            const blob = await pdfResponse.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = \`inventory-report-\${saveData.referenceNumber}.pdf\`;
-            a.click();
-            window.URL.revokeObjectURL(url);
-            alert('Inventory report generated and saved to statements!');
-          } else {
-            throw new Error('PDF generation failed');
-          }
+        if (pdfResponse.ok) {
+          const blob = await pdfResponse.blob();
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = \`inventory-report-\${reportData.id}.pdf\`;
+          a.click();
+          window.URL.revokeObjectURL(url);
+          alert('Inventory report generated and saved to statements!');
         } else {
-          throw new Error('Failed to save report: ' + saveData.error);
+          throw new Error('PDF generation failed');
         }
       } catch (error) {
         console.error('Download report error:', error);
-        alert('Error generating PDF report: ' + error.message);
+        alert('Error generating PDF report.');
       }
     }
 
@@ -1938,6 +1837,223 @@ function getDashboardPage() {
       document.getElementById('username').textContent = user.username;
       loadLoginHistory();
       loadInventory();
+    });
+  </script>
+</body>
+</html>`;
+}
+
+function getReferencePage() {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Generate Reference Report | Inventory System</title>
+  <style>${getCSS()}</style>
+</head>
+<body>
+  <div class="container">
+    <div class="topbar">
+      <h2>📋 Generate Reference Report</h2>
+      <div class="topbar-actions">
+        <span>Welcome, <strong id="username"></strong></span>
+        <button class="btn small ghost" onclick="toggleTheme()">🌓</button>
+        <button class="btn small" onclick="window.location.href='/?page=dashboard'">← Dashboard</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Select Items for Reference Report</h3>
+      <div class="search-section">
+        <div class="form-row">
+          <label style="flex: 1;">
+            Search Products
+            <input type="text" id="referenceSearch" placeholder="Search by SKU, Name, or Category..." oninput="searchReferenceItems()">
+          </label>
+        </div>
+      </div>
+      <div id="availableItems" class="invoice-items-list"></div>
+    </div>
+
+    <div class="card">
+      <h3>Reference Report Items</h3>
+      <div id="referenceItems"></div>
+      <div class="invoice-total">
+        <h4>Total: RM <span id="referenceTotal">0.00</span></h4>
+      </div>
+      <div class="controls">
+        <button class="btn info" id="downloadPdf" onclick="downloadReferencePDF()">Download PDF</button>
+        <button class="btn danger" onclick="clearReference()">Clear</button>
+      </div>
+    </div>
+  </div>
+
+  <footer>© 2025 Inventory Management System | Rex_Ho</footer>
+
+  <script>${getJavaScript()}</script>
+  <script>
+    let selectedReferenceItems = [];
+    let availableItems = [];
+
+    async function loadAvailableItems() {
+      try {
+        const search = document.getElementById('referenceSearch').value;
+        let url = '/api/inventory';
+        
+        if (search) {
+          url += '?search=' + encodeURIComponent(search);
+        }
+        
+        const response = await fetch(url);
+        availableItems = await response.json();
+        const container = document.getElementById('availableItems');
+        container.innerHTML = availableItems.length ? '' : '<p>No items available</p>';
+        
+        availableItems.forEach((item, index) => {
+          const itemDiv = document.createElement('div');
+          itemDiv.className = 'invoice-item';
+          itemDiv.innerHTML = \`
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div>
+                <strong>\${item.name}</strong> (\${item.sku})<br>
+                <small>Category: \${item.category} | Available: \${item.quantity} | Price: RM \${item.unitPrice.toFixed(2)}</small>
+              </div>
+              <div>
+                <input type="number" id="qty-\${index}" min="1" max="\${item.quantity}" value="1" style="width: 80px; margin-right: 10px;">
+                <button class="btn small" onclick="addToReference(\${index})">Add to Report</button>
+              </div>
+            </div>
+          \`;
+          container.appendChild(itemDiv);
+        });
+      } catch (error) {
+        console.error('Error loading items:', error);
+      }
+    }
+
+    function searchReferenceItems() {
+      loadAvailableItems();
+    }
+
+    function addToReference(index) {
+      const item = availableItems[index];
+      const quantity = parseInt(document.getElementById(\`qty-\${index}\`).value) || 1;
+      
+      if (quantity > item.quantity) {
+        alert(\`Only \${item.quantity} items available!\`);
+        return;
+      }
+
+      const existingIndex = selectedReferenceItems.findIndex(selected => selected.index === index);
+      if (existingIndex > -1) {
+        selectedReferenceItems[existingIndex].invoiceQty = quantity;
+      } else {
+        selectedReferenceItems.push({ index: index, ...item, invoiceQty: quantity });
+      }
+      
+      updateReferenceDisplay();
+    }
+
+    function updateReferenceDisplay() {
+      const container = document.getElementById('referenceItems');
+      const totalElement = document.getElementById('referenceTotal');
+      container.innerHTML = selectedReferenceItems.length ? '' : '<p>No items in reference report</p>';
+      
+      let total = 0;
+      selectedReferenceItems.forEach((item, i) => {
+        const itemTotal = item.invoiceQty * item.unitPrice;
+        total += itemTotal;
+        
+        const itemDiv = document.createElement('div');
+        itemDiv.className = 'invoice-item';
+        itemDiv.innerHTML = \`
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <strong>\${item.name}</strong> (\${item.sku})<br>
+              <small>Qty: \${item.invoiceQty} × RM \${item.unitPrice.toFixed(2)} = RM \${itemTotal.toFixed(2)}</small>
+            </div>
+            <button class="btn small danger" onclick="removeFromReference(\${i})">Remove</button>
+          </div>
+        \`;
+        container.appendChild(itemDiv);
+      });
+      
+      totalElement.textContent = total.toFixed(2);
+      document.getElementById('downloadPdf').disabled = selectedReferenceItems.length === 0;
+    }
+
+    function removeFromReference(index) {
+      selectedReferenceItems.splice(index, 1);
+      updateReferenceDisplay();
+    }
+
+    function clearReference() {
+      selectedReferenceItems = [];
+      updateReferenceDisplay();
+    }
+
+    async function downloadReferencePDF() {
+      if (selectedReferenceItems.length === 0) {
+        alert('Please add items to the reference report first!');
+        return;
+      }
+
+      const referenceData = {
+        date: new Date().toLocaleString(),
+        items: selectedReferenceItems,
+        total: parseFloat(document.getElementById('referenceTotal').textContent)
+      };
+
+      try {
+        // Save reference report first to get the report number
+        const saveResponse = await fetch('/api/reference-reports/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ referenceData })
+        });
+
+        const saveResult = await saveResponse.json();
+        
+        if (!saveResponse.ok) {
+          throw new Error(saveResult.error || 'Failed to save reference report');
+        }
+
+        // Now generate PDF with the report number
+        referenceData.reportNumber = saveResult.reportNumber;
+        
+        const pdfResponse = await fetch('/generate-reference-report-pdf', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ referenceData })
+        });
+
+        if (pdfResponse.ok) {
+          const blob = await pdfResponse.blob();
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = \`reference-report-\${referenceData.reportNumber}.pdf\`;
+          a.click();
+          window.URL.revokeObjectURL(url);
+          
+          alert('Reference Report PDF generated successfully! Report number: ' + referenceData.reportNumber);
+        } else {
+          throw new Error('PDF generation failed');
+        }
+      } catch (error) {
+        alert('Error generating PDF: ' + error.message);
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
+      if (!user.username) {
+        window.location.href = '/';
+        return;
+      }
+      document.getElementById('username').textContent = user.username;
+      loadAvailableItems();
     });
   </script>
 </body>
@@ -1993,7 +2109,7 @@ function getPurchasePage() {
       </div>
       <div class="controls">
         <button class="btn primary" onclick="processPurchase()">Process Purchase</button>
-        <button class="btn" id="downloadPdf" style="display: none;" onclick="downloadPurchasePDF()">Download Purchase Order PDF</button>
+        <button class="btn" id="downloadPdf" style="display: none;" onclick="downloadPurchasePDF()">📥 Download Purchase Order PDF</button>
         <button class="btn danger" onclick="clearPurchase()">Clear</button>
       </div>
     </div>
@@ -2105,7 +2221,6 @@ function getPurchasePage() {
       selectedPurchaseItems = [];
       currentPurchaseData = null;
       document.getElementById('downloadPdf').style.display = 'none';
-      document.getElementById('supplier').value = '';
       updatePurchaseDisplay();
     }
 
@@ -2117,7 +2232,6 @@ function getPurchasePage() {
 
       try {
         const purchaseData = {
-          id: 'PUR-' + Date.now(),
           date: document.getElementById('purchaseDate').value || new Date().toLocaleString(),
           supplier: document.getElementById('supplier').value || 'N/A',
           items: selectedPurchaseItems,
@@ -2133,12 +2247,8 @@ function getPurchasePage() {
         const data = await response.json();
         
         if (response.ok) {
-          alert('Purchase processed successfully! Inventory updated.');
-          currentPurchaseData = {
-            ...purchaseData,
-            purchaseNumber: data.purchaseNumber,
-            referenceNumber: data.referenceNumber
-          };
+          currentPurchaseData = data.purchaseData;
+          alert('Purchase processed successfully! Purchase Number: ' + data.purchaseNumber);
           document.getElementById('downloadPdf').style.display = 'inline-block';
           loadAvailableItems();
         } else {
@@ -2167,7 +2277,7 @@ function getPurchasePage() {
           const url = window.URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
-          a.download = \`purchase-order-\${currentPurchaseData.referenceNumber}.pdf\`;
+          a.download = \`purchase-order-\${currentPurchaseData.purchaseNumber}.pdf\`;
           a.click();
           window.URL.revokeObjectURL(url);
         } else {
@@ -2241,7 +2351,7 @@ function getSalesPage() {
       </div>
       <div class="controls">
         <button class="btn success" onclick="processSale()">Process Sale</button>
-        <button class="btn" id="downloadPdf" style="display: none;" onclick="downloadSalesPDF()">Download Sales Invoice PDF</button>
+        <button class="btn" id="downloadPdf" style="display: none;" onclick="downloadSalesPDF()">📥 Download Sales Invoice PDF</button>
         <button class="btn danger" onclick="clearSale()">Clear</button>
       </div>
     </div>
@@ -2347,8 +2457,6 @@ function getSalesPage() {
       });
       
       totalElement.textContent = total.toFixed(2);
-      // Hide download button until sale is processed
-      document.getElementById('downloadPdf').style.display = 'none';
     }
 
     function removeFromSale(index) {
@@ -2360,7 +2468,6 @@ function getSalesPage() {
       selectedSalesItems = [];
       currentSalesData = null;
       document.getElementById('downloadPdf').style.display = 'none';
-      document.getElementById('customer').value = '';
       updateSalesDisplay();
     }
 
@@ -2372,7 +2479,6 @@ function getSalesPage() {
 
       try {
         const salesData = {
-          id: 'SAL-' + Date.now(),
           date: document.getElementById('salesDate').value || new Date().toLocaleString(),
           customer: document.getElementById('customer').value || 'N/A',
           items: selectedSalesItems,
@@ -2388,19 +2494,10 @@ function getSalesPage() {
         const data = await response.json();
         
         if (response.ok) {
-          alert('Sale processed successfully! Inventory updated.');
-          // Store the sales data with reference numbers
-          currentSalesData = {
-            ...salesData,
-            salesNumber: data.salesNumber,
-            referenceNumber: data.referenceNumber
-          };
+          currentSalesData = data.salesData;
+          alert('Sale processed successfully! Sales Number: ' + data.salesNumber);
           // Show download button after successful sale processing
           document.getElementById('downloadPdf').style.display = 'inline-block';
-          // Clear the form for next sale
-          selectedSalesItems = [];
-          updateSalesDisplay();
-          loadAvailableItems();
         } else {
           alert('Failed to process sale: ' + data.error);
         }
@@ -2427,235 +2524,11 @@ function getSalesPage() {
           const url = window.URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
-          a.download = \`sales-invoice-\${currentSalesData.referenceNumber}.pdf\`;
+          a.download = \`sales-invoice-\${currentSalesData.salesNumber}.pdf\`;
           a.click();
           window.URL.revokeObjectURL(url);
         } else {
           throw new Error('PDF generation failed');
-        }
-      } catch (error) {
-        alert('Error generating PDF: ' + error.message);
-      }
-    }
-
-    document.addEventListener('DOMContentLoaded', () => {
-      const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
-      if (!user.username) {
-        window.location.href = '/';
-        return;
-      }
-      document.getElementById('username').textContent = user.username;
-      loadAvailableItems();
-    });
-  </script>
-</body>
-</html>`;
-}
-
-function getInvoicePage() {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Generate Invoice | Inventory System</title>
-  <style>${getCSS()}</style>
-</head>
-<body>
-  <div class="container">
-    <div class="topbar">
-      <h2>📄 Generate Invoice</h2>
-      <div class="topbar-actions">
-        <span>Welcome, <strong id="username"></strong></span>
-        <button class="btn small ghost" onclick="toggleTheme()">🌓</button>
-        <button class="btn small" onclick="window.location.href='/?page=dashboard'">← Dashboard</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <h3>Select Items for Invoice</h3>
-      <div class="search-section">
-        <div class="form-row">
-          <label style="flex: 1;">
-            Search Products
-            <input type="text" id="invoiceSearch" placeholder="Search by SKU, Name, or Category..." oninput="searchInvoiceItems()">
-          </label>
-        </div>
-      </div>
-      <div id="availableItems" class="invoice-items-list"></div>
-    </div>
-
-    <div class="card">
-      <h3>Invoice Items</h3>
-      <div id="invoiceItems"></div>
-      <div class="invoice-total">
-        <h4>Total: RM <span id="invoiceTotal">0.00</span></h4>
-      </div>
-      <div class="controls">
-        <button class="btn info" id="downloadPdf" onclick="downloadPDF()">Download PDF</button>
-        <button class="btn danger" onclick="clearInvoice()">Clear</button>
-      </div>
-    </div>
-  </div>
-
-  <footer>© 2025 Inventory Management System | Rex_Ho</footer>
-
-  <script>${getJavaScript()}</script>
-  <script>
-    let selectedItems = [];
-    let availableItems = [];
-    let currentInvoiceData = null;
-
-    async function loadAvailableItems() {
-      try {
-        const search = document.getElementById('invoiceSearch').value;
-        let url = '/api/inventory';
-        
-        if (search) {
-          url += '?search=' + encodeURIComponent(search);
-        }
-        
-        const response = await fetch(url);
-        availableItems = await response.json();
-        const container = document.getElementById('availableItems');
-        container.innerHTML = availableItems.length ? '' : '<p>No items available</p>';
-        
-        availableItems.forEach((item, index) => {
-          const itemDiv = document.createElement('div');
-          itemDiv.className = 'invoice-item';
-          itemDiv.innerHTML = \`
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <div>
-                <strong>\${item.name}</strong> (\${item.sku})<br>
-                <small>Category: \${item.category} | Available: \${item.quantity} | Price: RM \${item.unitPrice.toFixed(2)}</small>
-              </div>
-              <div>
-                <input type="number" id="qty-\${index}" min="1" max="\${item.quantity}" value="1" style="width: 80px; margin-right: 10px;">
-                <button class="btn small" onclick="addToInvoice(\${index})">Add to Invoice</button>
-              </div>
-            </div>
-          \`;
-          container.appendChild(itemDiv);
-        });
-      } catch (error) {
-        console.error('Error loading items:', error);
-      }
-    }
-
-    function searchInvoiceItems() {
-      loadAvailableItems();
-    }
-
-    function addToInvoice(index) {
-      const item = availableItems[index];
-      const quantity = parseInt(document.getElementById(\`qty-\${index}\`).value) || 1;
-      
-      if (quantity > item.quantity) {
-        alert(\`Only \${item.quantity} items available!\`);
-        return;
-      }
-
-      const existingIndex = selectedItems.findIndex(selected => selected.index === index);
-      if (existingIndex > -1) {
-        selectedItems[existingIndex].invoiceQty = quantity;
-      } else {
-        selectedItems.push({ index: index, ...item, invoiceQty: quantity });
-      }
-      
-      updateInvoiceDisplay();
-    }
-
-    function updateInvoiceDisplay() {
-      const container = document.getElementById('invoiceItems');
-      const totalElement = document.getElementById('invoiceTotal');
-      container.innerHTML = selectedItems.length ? '' : '<p>No items in invoice</p>';
-      
-      let total = 0;
-      selectedItems.forEach((item, i) => {
-        const itemTotal = item.invoiceQty * item.unitPrice;
-        total += itemTotal;
-        
-        const itemDiv = document.createElement('div');
-        itemDiv.className = 'invoice-item';
-        itemDiv.innerHTML = \`
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div>
-              <strong>\${item.name}</strong> (\${item.sku})<br>
-              <small>Qty: \${item.invoiceQty} × RM \${item.unitPrice.toFixed(2)} = RM \${itemTotal.toFixed(2)}</small>
-            </div>
-            <button class="btn small danger" onclick="removeFromInvoice(\${i})">Remove</button>
-          </div>
-        \`;
-        container.appendChild(itemDiv);
-      });
-      
-      totalElement.textContent = total.toFixed(2);
-      document.getElementById('downloadPdf').disabled = selectedItems.length === 0;
-    }
-
-    function removeFromInvoice(index) {
-      selectedItems.splice(index, 1);
-      updateInvoiceDisplay();
-    }
-
-    function clearInvoice() {
-      selectedItems = [];
-      currentInvoiceData = null;
-      updateInvoiceDisplay();
-    }
-
-    async function downloadPDF() {
-      if (selectedItems.length === 0) {
-        alert('Please add items to the invoice first!');
-        return;
-      }
-
-      const invoiceData = {
-        id: 'INV-' + Date.now(),
-        date: new Date().toLocaleString(),
-        items: selectedItems,
-        total: parseFloat(document.getElementById('invoiceTotal').textContent)
-      };
-
-      try {
-        // Save invoice to database first to get reference number
-        const saveResponse = await fetch('/api/invoices', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ invoiceData })
-        });
-
-        const saveData = await saveResponse.json();
-        
-        if (saveResponse.ok) {
-          // Update invoice data with reference numbers
-          invoiceData.invoiceNumber = saveData.invoiceNumber;
-          invoiceData.referenceNumber = saveData.referenceNumber;
-          currentInvoiceData = invoiceData;
-          
-          // Generate PDF
-          const response = await fetch('/generate-invoice-pdf', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ invoiceData })
-          });
-
-          if (response.ok) {
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = \`invoice-\${saveData.referenceNumber}.pdf\`;
-            a.click();
-            window.URL.revokeObjectURL(url);
-            
-            alert('Invoice PDF generated successfully! Reference: ' + saveData.referenceNumber);
-            clearInvoice();
-          } else {
-            throw new Error('PDF generation failed');
-          }
-        } else {
-          throw new Error('Failed to save invoice: ' + saveData.error);
         }
       } catch (error) {
         alert('Error generating PDF: ' + error.message);
@@ -2688,7 +2561,7 @@ function getStatementPage() {
 <body>
   <div class="container">
     <div class="topbar">
-      <h2>📋 Statements & Reports</h2>
+      <h2>📑 Statements & Reports</h2>
       <div class="topbar-actions">
         <span>Welcome, <strong id="username"></strong></span>
         <button class="btn small ghost" onclick="toggleTheme()">🌓</button>
@@ -2702,6 +2575,11 @@ function getStatementPage() {
     </div>
 
     <div class="card">
+      <h3>Reference Reports</h3>
+      <div id="referenceReportsList"></div>
+    </div>
+
+    <div class="card">
       <h3>Purchase History</h3>
       <div id="purchasesList"></div>
     </div>
@@ -2711,10 +2589,6 @@ function getStatementPage() {
       <div id="salesList"></div>
     </div>
 
-    <div class="card">
-      <h3>Invoice History</h3>
-      <div id="invoicesList"></div>
-    </div>
   </div>
 
   <footer>© 2025 Inventory Management System | Rex_Ho</footer>
@@ -2730,6 +2604,7 @@ function getStatementPage() {
         if (statements.length === 0) {
           container.innerHTML = '<p>No reports generated yet.</p>';
         } else {
+          statements.sort((a, b) => new Date(b.date) - new Date(a.date));
           container.innerHTML = '';
           
           statements.forEach((report, index) => {
@@ -2738,12 +2613,12 @@ function getStatementPage() {
             reportDiv.innerHTML = \`
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                  <strong>Ref: \${report.referenceNumber || report.id}</strong><br>
-                  <small>Number: \${report.statementNumber} | Generated: \${report.date}</small><br>
-                  <small>Items: \${report.items ? report.items.length : 0} | Date Range: \${report.dateRange || 'All Items'}</small>
+                  <strong>\${report.id}</strong><br>
+                  <small>Generated: \${report.date}</small><br>
+                  <small>Items: \${report.items.length} | \${report.totalInventoryValue} | \${report.totalPotentialValue}</small>
                 </div>
                 <div>
-                  <button class="btn small" onclick="downloadReport('\${report._id}', '\${report.referenceNumber || report.id}')">📥 Download</button>
+                  <button class="btn small" onclick="downloadReport(\${index})">📥 Download</button>
                   <button class="btn small danger" onclick="deleteReport('\${report._id}')">🗑️ Delete</button>
                 </div>
               </div>
@@ -2756,6 +2631,42 @@ function getStatementPage() {
       }
     }
 
+    async function loadReferenceReports() {
+      try {
+        const response = await fetch('/api/reference-reports');
+        const referenceReports = await response.json();
+        const container = document.getElementById('referenceReportsList');
+        
+        if (referenceReports.length === 0) {
+          container.innerHTML = '<p>No reference reports generated yet.</p>';
+        } else {
+          referenceReports.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+          container.innerHTML = '';
+          
+          referenceReports.forEach((report, index) => {
+            const reportDiv = document.createElement('div');
+            reportDiv.className = 'invoice-item';
+            reportDiv.innerHTML = \`
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <strong>\${report.reportNumber}</strong><br>
+                  <small>Date: \${report.date}</small><br>
+                  <small>Items: \${report.items.length} | Total: RM \${report.total.toFixed(2)}</small>
+                </div>
+                <div>
+                  <button class="btn small" onclick="downloadReferenceReportPDF('\${report.reportNumber}', \${index})">📥 PDF</button>
+                  <button class="btn small danger" onclick="deleteReferenceReport('\${report._id}')">🗑️ Delete</button>
+                </div>
+              </div>
+            \`;
+            container.appendChild(reportDiv);
+          });
+        }
+      } catch (error) {
+        console.error('Error loading reference reports:', error);
+      }
+    }
+
     async function loadPurchases() {
       try {
         const response = await fetch('/api/purchases');
@@ -2765,6 +2676,7 @@ function getStatementPage() {
         if (purchases.length === 0) {
           container.innerHTML = '<p>No purchase history.</p>';
         } else {
+          purchases.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
           container.innerHTML = '';
           
           purchases.forEach((purchase, index) => {
@@ -2773,12 +2685,12 @@ function getStatementPage() {
             purchaseDiv.innerHTML = \`
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                  <strong>Ref: \${purchase.referenceNumber || purchase.id}</strong><br>
-                  <small>Number: \${purchase.purchaseNumber} | Date: \${purchase.date} | Supplier: \${purchase.supplier}</small><br>
-                  <small>Items: \${purchase.items.length} | Total: RM \${purchase.total ? purchase.total.toFixed(2) : '0.00'}</small>
+                  <strong>\${purchase.purchaseNumber}</strong><br>
+                  <small>Date: \${purchase.date} | Supplier: \${purchase.supplier}</small><br>
+                  <small>Items: \${purchase.items.length} | Total: RM \${purchase.total.toFixed(2)}</small>
                 </div>
                 <div>
-                  <button class="btn small" onclick="downloadPurchasePDF('\${purchase._id}', '\${purchase.referenceNumber || purchase.id}')">📥 PDF</button>
+                  <button class="btn small" onclick="downloadPurchasePDF('\${purchase._id}', \${index})">📥 PDF</button>
                 </div>
               </div>
             \`;
@@ -2799,6 +2711,7 @@ function getStatementPage() {
         if (sales.length === 0) {
           container.innerHTML = '<p>No sales history.</p>';
         } else {
+          sales.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
           container.innerHTML = '';
           
           sales.forEach((sale, index) => {
@@ -2807,12 +2720,12 @@ function getStatementPage() {
             saleDiv.innerHTML = \`
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                  <strong>Ref: \${sale.referenceNumber || sale.id}</strong><br>
-                  <small>Number: \${sale.salesNumber} | Date: \${sale.date} | Customer: \${sale.customer}</small><br>
-                  <small>Items: \${sale.items.length} | Total: RM \${sale.total ? sale.total.toFixed(2) : '0.00'}</small>
+                  <strong>\${sale.salesNumber}</strong><br>
+                  <small>Date: \${sale.date} | Customer: \${sale.customer}</small><br>
+                  <small>Items: \${sale.items.length} | Total: RM \${sale.total.toFixed(2)}</small>
                 </div>
                 <div>
-                  <button class="btn small" onclick="downloadSalesPDF('\${sale._id}', '\${sale.referenceNumber || sale.id}')">📥 PDF</button>
+                  <button class="btn small" onclick="downloadSalePDF('\${sale._id}', \${index})">📥 PDF</button>
                 </div>
               </div>
             \`;
@@ -2824,46 +2737,11 @@ function getStatementPage() {
       }
     }
 
-    async function loadInvoices() {
-      try {
-        const response = await fetch('/api/invoices');
-        const invoices = await response.json();
-        const container = document.getElementById('invoicesList');
-        
-        if (invoices.length === 0) {
-          container.innerHTML = '<p>No invoice history.</p>';
-        } else {
-          container.innerHTML = '';
-          
-          invoices.forEach((invoice, index) => {
-            const invoiceDiv = document.createElement('div');
-            invoiceDiv.className = 'invoice-item';
-            invoiceDiv.innerHTML = \`
-              <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div>
-                  <strong>Ref: \${invoice.referenceNumber || invoice.id}</strong><br>
-                  <small>Number: \${invoice.invoiceNumber} | Date: \${invoice.date}</small><br>
-                  <small>Items: \${invoice.items.length} | Total: RM \${invoice.total ? invoice.total.toFixed(2) : '0.00'}</small>
-                </div>
-                <div>
-                  <button class="btn small" onclick="downloadInvoicePDF('\${invoice._id}', '\${invoice.referenceNumber || invoice.id}')">📥 PDF</button>
-                  <button class="btn small danger" onclick="deleteInvoice('\${invoice._id}')">🗑️ Delete</button>
-                </div>
-              </div>
-            \`;
-            container.appendChild(invoiceDiv);
-          });
-        }
-      } catch (error) {
-        console.error('Error loading invoices:', error);
-      }
-    }
-
-    async function downloadReport(id, referenceNumber) {
+    async function downloadReport(index) {
       try {
         const response = await fetch('/api/statements');
         const statements = await response.json();
-        const report = statements.find(s => s._id === id);
+        const report = statements[index];
         
         if (report) {
           const pdfResponse = await fetch('/generate-inventory-report-pdf', {
@@ -2877,11 +2755,9 @@ function getStatementPage() {
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = \`inventory-report-\${referenceNumber}.pdf\`;
+            a.download = \`inventory-report-\${report.id}.pdf\`;
             a.click();
             window.URL.revokeObjectURL(url);
-          } else {
-            alert('Failed to generate PDF');
           }
         }
       } catch (error) {
@@ -2889,11 +2765,39 @@ function getStatementPage() {
       }
     }
 
-    async function downloadPurchasePDF(id, referenceNumber) {
+    async function downloadReferenceReportPDF(reportNumber, index) {
+      try {
+        const response = await fetch('/api/reference-reports');
+        const reports = await response.json();
+        const report = reports[index];
+        
+        if (report) {
+          const pdfResponse = await fetch('/generate-reference-report-pdf', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ referenceData: report })
+          });
+
+          if (pdfResponse.ok) {
+            const blob = await pdfResponse.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = \`reference-report-\${report.reportNumber}.pdf\`;
+            a.click();
+            window.URL.revokeObjectURL(url);
+          }
+        }
+      } catch (error) {
+        alert('Error downloading reference report PDF: ' + error.message);
+      }
+    }
+
+    async function downloadPurchasePDF(purchaseId, index) {
       try {
         const response = await fetch('/api/purchases');
         const purchases = await response.json();
-        const purchase = purchases.find(p => p._id === id);
+        const purchase = purchases[index];
         
         if (purchase) {
           const pdfResponse = await fetch('/generate-purchase-pdf', {
@@ -2907,11 +2811,9 @@ function getStatementPage() {
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = \`purchase-order-\${referenceNumber}.pdf\`;
+            a.download = \`purchase-order-\${purchase.purchaseNumber}.pdf\`;
             a.click();
             window.URL.revokeObjectURL(url);
-          } else {
-            alert('Failed to generate PDF');
           }
         }
       } catch (error) {
@@ -2919,11 +2821,11 @@ function getStatementPage() {
       }
     }
 
-    async function downloadSalesPDF(id, referenceNumber) {
+    async function downloadSalePDF(saleId, index) {
       try {
         const response = await fetch('/api/sales');
         const sales = await response.json();
-        const sale = sales.find(s => s._id === id);
+        const sale = sales[index];
         
         if (sale) {
           const pdfResponse = await fetch('/generate-sales-pdf', {
@@ -2937,45 +2839,13 @@ function getStatementPage() {
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = \`sales-invoice-\${referenceNumber}.pdf\`;
+            a.download = \`sales-invoice-\${sale.salesNumber}.pdf\`;
             a.click();
             window.URL.revokeObjectURL(url);
-          } else {
-            alert('Failed to generate PDF');
           }
         }
       } catch (error) {
         alert('Error downloading sales PDF: ' + error.message);
-      }
-    }
-
-    async function downloadInvoicePDF(id, referenceNumber) {
-      try {
-        const response = await fetch('/api/invoices');
-        const invoices = await response.json();
-        const invoice = invoices.find(i => i._id === id);
-        
-        if (invoice) {
-          const pdfResponse = await fetch('/generate-invoice-pdf', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ invoiceData: invoice })
-          });
-
-          if (pdfResponse.ok) {
-            const blob = await pdfResponse.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = \`invoice-\${referenceNumber}.pdf\`;
-            a.click();
-            window.URL.revokeObjectURL(url);
-          } else {
-            alert('Failed to generate PDF');
-          }
-        }
-      } catch (error) {
-        alert('Error downloading invoice PDF: ' + error.message);
       }
     }
 
@@ -2996,20 +2866,20 @@ function getStatementPage() {
       }
     }
 
-    async function deleteInvoice(id) {
-      if (!confirm('Are you sure you want to delete this invoice?')) return;
+    async function deleteReferenceReport(id) {
+      if (!confirm('Are you sure you want to delete this reference report?')) return;
 
       try {
-        const response = await fetch('/api/invoices/' + id, { method: 'DELETE' });
+        const response = await fetch('/api/reference-reports/' + id, { method: 'DELETE' });
         const data = await response.json();
         
         if (response.ok) {
-          loadInvoices();
+          loadReferenceReports();
         } else {
-          alert('Failed to delete invoice: ' + data.error);
+          alert('Failed to delete reference report: ' + data.error);
         }
       } catch (error) {
-        alert('Error deleting invoice: ' + error.message);
+        alert('Error deleting reference report: ' + error.message);
       }
     }
 
@@ -3021,9 +2891,9 @@ function getStatementPage() {
       }
       document.getElementById('username').textContent = user.username;
       loadReports();
+      loadReferenceReports();
       loadPurchases();
       loadSales();
-      loadInvoices();
     });
   </script>
 </body>
@@ -3699,26 +3569,19 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('   ✅ Search & Date Range Filter for Inventory');
   console.log('   ✅ Purchase (Stock In) with Search & PDF Generation');
   console.log('   ✅ Sales (Stock Out) with Search & PDF Generation');
-  console.log('   ✅ Invoice Generation with PDF');
+  console.log('   ✅ Reference Report Generation with PDF (Updated from Invoice)');
   console.log('   ✅ Statements & Reports with History');
   console.log('   ✅ Account Settings & Password Management');
   console.log('   ✅ Dark/Light Theme Toggle');
   console.log('   ✅ Responsive Design for Mobile');
   console.log('   ✅ Smart PDF Button Visibility (Shows after processing)');
   console.log('   ✅ Enhanced Login History with All Users');
-  console.log('   ✅ Professional PDF Layout Design');
+  console.log('   ✅ Professional PDF Layout Design (Single Page)');
   console.log('   ✅ Security Code for Account Deletion');
   console.log('   ✅ Inventory Value Summary');
   console.log('   ✅ Date Range Specific Inventory Reports');
   console.log('   ✅ Preserved Inventory Data on Account Deletion');
   console.log('   ✅ Complete Multi-User System');
   console.log('   ✅ Enterprise-Level Inventory Management');
-  console.log('🆕 NEW UPDATES:');
-  console.log('   ✅ Invoice reference numbers (REF-0000000000001)');
-  console.log('   ✅ Purchase numbers (0000000000001) with REF-PUR prefix');
-  console.log('   ✅ Sales numbers (0000000000001) with REF-SAL prefix');
-  console.log('   ✅ Fixed statement sale invoice PDF download bug');
-  console.log('   ✅ All PDFs now single page with proper formatting');
-  console.log('   ✅ Fixed Process Sale button showing download PDF');
-  console.log('   ✅ Auto-incrementing counters for all document types');
+  console.log('   ✅ Sequential Numbering System: REF-0000000000001, PUR-0000000000001, SAL-0000000000001');
 });
