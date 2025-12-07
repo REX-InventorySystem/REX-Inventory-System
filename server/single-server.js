@@ -2266,7 +2266,6 @@ function getPurchasePage() {
       </div>
       <div class="controls">
         <button class="btn primary" onclick="processPurchase()">Process Purchase</button>
-        <button class="btn" id="downloadPdf" style="display: none;" onclick="downloadPurchasePDF()">📥 Download Purchase Order PDF</button>
         <button class="btn danger" onclick="clearPurchase()">Clear</button>
       </div>
     </div>
@@ -2406,7 +2405,6 @@ function getPurchasePage() {
           latestPurchaseData._id = data.id; // Store the ID for PDF generation
           
           alert('Purchase processed successfully! Purchase Number: ' + data.purchaseNumber);
-          document.getElementById('downloadPdf').style.display = 'inline-block';
           
           // Automatically download the PDF after processing
           await downloadPurchasePDF();
@@ -2522,7 +2520,6 @@ function getSalesPage() {
       </div>
       <div class="controls">
         <button class="btn success" onclick="processSale()">Process Sale</button>
-        <button class="btn" id="downloadPdf" style="display: none;" onclick="downloadSalesPDF()">📥 Download Sales Invoice PDF</button>
         <button class="btn danger" onclick="clearSale()">Clear</button>
       </div>
     </div>
@@ -2667,7 +2664,6 @@ function getSalesPage() {
           latestSalesData._id = data.id; // Store the ID for PDF generation
           
           alert('Sale processed successfully! Sales Number: ' + data.salesNumber);
-          document.getElementById('downloadPdf').style.display = 'inline-block';
           
           // Automatically download the PDF after processing
           await downloadSalesPDF();
@@ -3807,7 +3803,6 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('   ✅ Account Settings & Password Management');
   console.log('   ✅ Dark/Light Theme Toggle');
   console.log('   ✅ Responsive Design for Mobile');
-  console.log('   ✅ Smart PDF Button Visibility (Shows after processing)');
   console.log('   ✅ Enhanced Login History with All Users');
   console.log('   ✅ Professional PDF Layout Design (Single Page)');
   console.log('   ✅ Security Code for Account Deletion');
@@ -3825,5 +3820,5 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('   ✅ NEW: Automatic PDF download after purchase/sale processing');
   console.log('   ✅ FIXED: "Purchase not found" error in PDF download');
   console.log('   ✅ FIXED: JSON parsing error for reference report PDF');
-  console.log('   ✅ RESTORED: Automatic PDF download for Purchase & Sales pages');
+  console.log('   ✅ REMOVED: PDF download buttons from Purchase & Sales pages (Automatic download still works)');
 });
