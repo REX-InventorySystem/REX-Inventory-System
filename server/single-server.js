@@ -61,18 +61,24 @@ app.get('/health', (req, res) => {
 
 // Counter for sequential numbers
 async function getNextSequence(collectionName) {
-  const counters = db.collection('counters');
-  
-  const result = await counters.findOneAndUpdate(
-    { _id: collectionName },
-    { $inc: { sequence_value: 1 } },
-    { 
-      upsert: true,
-      returnDocument: 'after'
-    }
-  );
-  
-  return result.sequence_value.toString().padStart(13, '0');
+  try {
+    const counters = db.collection('counters');
+    
+    const result = await counters.findOneAndUpdate(
+      { _id: collectionName },
+      { $inc: { sequence_value: 1 } },
+      { 
+        upsert: true,
+        returnDocument: 'after'
+      }
+    );
+    
+    return result.value ? result.value.sequence_value.toString().padStart(13, '0') : '1'.padStart(13, '0');
+  } catch (error) {
+    console.error('Error getting sequence:', error);
+    // Fallback to timestamp if counter fails
+    return Date.now().toString().slice(-13).padStart(13, '0');
+  }
 }
 
 // Initialize MongoDB
@@ -95,8 +101,42 @@ async function connectDB() {
         }
       }
     }
+    
+    // Initialize counters if they don't exist
+    await initializeCounters();
   } catch (error) {
     console.error('❌ MongoDB connection failed:', error);
+  }
+}
+
+async function initializeCounters() {
+  try {
+    const counters = db.collection('counters');
+    
+    // Initialize reference_reports counter
+    await counters.updateOne(
+      { _id: 'reference_reports' },
+      { $setOnInsert: { sequence_value: 1 } },
+      { upsert: true }
+    );
+    
+    // Initialize purchases counter
+    await counters.updateOne(
+      { _id: 'purchases' },
+      { $setOnInsert: { sequence_value: 1 } },
+      { upsert: true }
+    );
+    
+    // Initialize sales counter
+    await counters.updateOne(
+      { _id: 'sales' },
+      { $setOnInsert: { sequence_value: 1 } },
+      { upsert: true }
+    );
+    
+    console.log('✅ Counters initialized');
+  } catch (error) {
+    console.error('Error initializing counters:', error);
   }
 }
 
@@ -289,7 +329,8 @@ app.post('/api/reference-reports/add', async (req, res) => {
     await db.collection('reference_reports').insertOne(referenceReportData);
     res.json({ 
       message: 'Reference report saved successfully',
-      reportNumber: referenceReportData.reportNumber 
+      reportNumber: referenceReportData.reportNumber,
+      referenceData: referenceReportData
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -321,16 +362,22 @@ app.post('/api/purchases', async (req, res) => {
       createdAt: new Date()
     };
     
+    // Fix: Ensure itemId is properly converted to ObjectId
+    purchaseData.items = purchaseData.items.map(item => ({
+      ...item,
+      itemId: typeof item.itemId === 'string' ? new ObjectId(item.itemId) : item.itemId
+    }));
+    
     await db.collection('purchases').insertOne(purchaseData);
     
     // Update inventory quantities
     for (const item of purchaseData.items) {
-      const existingItem = await db.collection('inventory').findOne({ _id: new ObjectId(item.itemId) });
+      const existingItem = await db.collection('inventory').findOne({ _id: item.itemId });
       
       if (existingItem) {
-        const newQuantity = existingItem.quantity + item.quantity;
+        const newQuantity = (existingItem.quantity || 0) + (item.quantity || 0);
         await db.collection('inventory').updateOne(
-          { _id: new ObjectId(item.itemId) },
+          { _id: item.itemId },
           { $set: { quantity: newQuantity } }
         );
       }
@@ -342,6 +389,7 @@ app.post('/api/purchases', async (req, res) => {
       purchaseData: purchaseData
     });
   } catch (error) {
+    console.error('Purchase error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -366,20 +414,26 @@ app.post('/api/sales', async (req, res) => {
       createdAt: new Date()
     };
     
+    // Fix: Ensure itemId is properly converted to ObjectId
+    salesData.items = salesData.items.map(item => ({
+      ...item,
+      itemId: typeof item.itemId === 'string' ? new ObjectId(item.itemId) : item.itemId
+    }));
+    
     const result = await db.collection('sales').insertOne(salesData);
     
     // Update inventory quantities
     for (const item of salesData.items) {
-      const existingItem = await db.collection('inventory').findOne({ _id: new ObjectId(item.itemId) });
+      const existingItem = await db.collection('inventory').findOne({ _id: item.itemId });
       
       if (existingItem) {
-        const newQuantity = existingItem.quantity - item.quantity;
+        const newQuantity = (existingItem.quantity || 0) - (item.quantity || 0);
         if (newQuantity < 0) {
           return res.status(400).json({ error: 'Insufficient stock for ' + existingItem.name });
         }
         
         await db.collection('inventory').updateOne(
-          { _id: new ObjectId(item.itemId) },
+          { _id: item.itemId },
           { $set: { quantity: newQuantity } }
         );
       }
@@ -389,9 +443,10 @@ app.post('/api/sales', async (req, res) => {
       message: 'Sale recorded successfully',
       salesNumber: salesData.salesNumber,
       salesData: salesData,
-      id: result.insertedId
+      id: result.insertedId.toString()
     });
   } catch (error) {
+    console.error('Sales error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -506,6 +561,10 @@ app.post('/generate-reference-report-pdf', (req, res) => {
   try {
     const { referenceData } = req.body;
     
+    if (!referenceData || !referenceData.items || !Array.isArray(referenceData.items)) {
+      return res.status(400).json({ error: 'Invalid reference data' });
+    }
+    
     const doc = new PDFDocument({ 
       margin: 50,
       size: 'A4'
@@ -584,10 +643,13 @@ app.post('/generate-reference-report-pdf', (req, res) => {
     
     let yPosition = tableTop + 35;
     let itemsPerPage = 15; // Limit items to fit on one page
+    const displayItems = referenceData.items.slice(0, itemsPerPage);
     
     // Reference items
-    referenceData.items.slice(0, itemsPerPage).forEach((item, index) => {
-      const itemTotal = item.invoiceQty * item.unitPrice;
+    displayItems.forEach((item, index) => {
+      const quantity = item.invoiceQty || item.quantity || 1;
+      const unitPrice = item.unitPrice || 0;
+      const itemTotal = quantity * unitPrice;
       const isEven = index % 2 === 0;
       
       // Alternate row colors
@@ -600,16 +662,16 @@ app.post('/generate-reference-report-pdf', (req, res) => {
       doc.fillColor('#1e293b')
          .font('Helvetica')
          .fontSize(9)
-         .text(item.name, 55, yPosition)
-         .text(item.sku, 200, yPosition)
-         .text(item.invoiceQty.toString(), 350, yPosition)
-         .text(`RM ${item.unitPrice.toFixed(2)}`, 400, yPosition)
+         .text(item.name || 'Unnamed Item', 55, yPosition)
+         .text(item.sku || 'N/A', 200, yPosition)
+         .text(quantity.toString(), 350, yPosition)
+         .text(`RM ${unitPrice.toFixed(2)}`, 400, yPosition)
          .text(`RM ${itemTotal.toFixed(2)}`, 470, yPosition);
       
       // Item details
       doc.fillColor('#64748b')
          .fontSize(7)
-         .text(`Category: ${item.category}`, 55, yPosition + 12);
+         .text(`Category: ${item.category || 'N/A'}`, 55, yPosition + 12);
       
       yPosition += 30;
     });
@@ -635,7 +697,7 @@ app.post('/generate-reference-report-pdf', (req, res) => {
        .font('Helvetica-Bold')
        .text('Grand Total:', 350, totalY + 10, { continued: true })
        .fillColor('#3b82f6')
-       .text(` RM ${referenceData.total.toFixed(2)}`, { align: 'right' });
+       .text(` RM ${(referenceData.total || 0).toFixed(2)}`, { align: 'right' });
     
     // Footer
     const footerY = Math.min(totalY + 50, 700);
@@ -656,6 +718,10 @@ app.post('/generate-reference-report-pdf', (req, res) => {
 app.post('/generate-purchase-pdf', (req, res) => {
   try {
     const { purchaseData } = req.body;
+    
+    if (!purchaseData || !purchaseData.items || !Array.isArray(purchaseData.items)) {
+      return res.status(400).json({ error: 'Invalid purchase data' });
+    }
     
     const doc = new PDFDocument({ 
       margin: 50,
@@ -735,10 +801,13 @@ app.post('/generate-purchase-pdf', (req, res) => {
     let yPosition = tableTop + 35;
     let totalCost = 0;
     let itemsPerPage = 15;
+    const displayItems = purchaseData.items.slice(0, itemsPerPage);
     
     // Purchase items
-    purchaseData.items.slice(0, itemsPerPage).forEach((item, index) => {
-      const itemTotal = item.quantity * item.unitCost;
+    displayItems.forEach((item, index) => {
+      const quantity = item.quantity || 1;
+      const unitCost = item.unitCost || 0;
+      const itemTotal = quantity * unitCost;
       totalCost += itemTotal;
       const isEven = index % 2 === 0;
       
@@ -752,10 +821,10 @@ app.post('/generate-purchase-pdf', (req, res) => {
       doc.fillColor('#1e293b')
          .font('Helvetica')
          .fontSize(9)
-         .text(item.name, 55, yPosition)
-         .text(item.sku, 200, yPosition)
-         .text(item.quantity.toString(), 300, yPosition)
-         .text(`RM ${item.unitCost.toFixed(2)}`, 350, yPosition)
+         .text(item.name || 'Unnamed Item', 55, yPosition)
+         .text(item.sku || 'N/A', 200, yPosition)
+         .text(quantity.toString(), 300, yPosition)
+         .text(`RM ${unitCost.toFixed(2)}`, 350, yPosition)
          .text(`RM ${itemTotal.toFixed(2)}`, 450, yPosition);
       
       yPosition += 25;
@@ -803,6 +872,10 @@ app.post('/generate-purchase-pdf', (req, res) => {
 app.post('/generate-sales-pdf', (req, res) => {
   try {
     const { salesData } = req.body;
+    
+    if (!salesData || !salesData.items || !Array.isArray(salesData.items)) {
+      return res.status(400).json({ error: 'Invalid sales data' });
+    }
     
     const doc = new PDFDocument({ 
       margin: 50,
@@ -881,10 +954,13 @@ app.post('/generate-sales-pdf', (req, res) => {
     
     let yPosition = tableTop + 35;
     let itemsPerPage = 15;
+    const displayItems = salesData.items.slice(0, itemsPerPage);
     
     // Sales items
-    salesData.items.slice(0, itemsPerPage).forEach((item, index) => {
-      const itemTotal = item.quantity * item.unitPrice;
+    displayItems.forEach((item, index) => {
+      const quantity = item.quantity || 1;
+      const unitPrice = item.unitPrice || 0;
+      const itemTotal = quantity * unitPrice;
       const isEven = index % 2 === 0;
       
       // Alternate row colors
@@ -897,10 +973,10 @@ app.post('/generate-sales-pdf', (req, res) => {
       doc.fillColor('#1e293b')
          .font('Helvetica')
          .fontSize(9)
-         .text(item.name, 55, yPosition)
-         .text(item.sku, 200, yPosition)
-         .text(item.quantity.toString(), 300, yPosition)
-         .text(`RM ${item.unitPrice.toFixed(2)}`, 350, yPosition)
+         .text(item.name || 'Unnamed Item', 55, yPosition)
+         .text(item.sku || 'N/A', 200, yPosition)
+         .text(quantity.toString(), 300, yPosition)
+         .text(`RM ${unitPrice.toFixed(2)}`, 350, yPosition)
          .text(`RM ${itemTotal.toFixed(2)}`, 450, yPosition);
       
       yPosition += 25;
@@ -927,7 +1003,7 @@ app.post('/generate-sales-pdf', (req, res) => {
        .font('Helvetica-Bold')
        .text('Grand Total:', 350, totalY + 10, { continued: true })
        .fillColor('#ef4444')
-       .text(` RM ${salesData.total.toFixed(2)}`, { align: 'right' });
+       .text(` RM ${(salesData.total || 0).toFixed(2)}`, { align: 'right' });
     
     // Footer
     const footerY = Math.min(totalY + 50, 700);
@@ -949,6 +1025,10 @@ app.post('/generate-sales-pdf', (req, res) => {
 app.post('/generate-inventory-report-pdf', (req, res) => {
   try {
     const { reportData } = req.body;
+    
+    if (!reportData || !reportData.items || !Array.isArray(reportData.items)) {
+      return res.status(400).json({ error: 'Invalid report data' });
+    }
     
     const doc = new PDFDocument({ 
       margin: 50,
@@ -994,12 +1074,12 @@ app.post('/generate-inventory-report-pdf', (req, res) => {
        .fontSize(11)
        .text('Report ID:', leftColumn, doc.y, { continued: true })
        .fillColor('#64748b')
-       .text(` ${reportData.id}`)
+       .text(` ${reportData.id || 'N/A'}`)
        
        .fillColor('#1e293b')
        .text('Generated:', leftColumn, doc.y + 20, { continued: true })
        .fillColor('#64748b')
-       .text(` ${reportData.date}`)
+       .text(` ${reportData.date || new Date().toLocaleDateString()}`)
        
        .fillColor('#1e293b')
        .text('Date Range:', leftColumn, doc.y + 40, { continued: true })
@@ -1041,14 +1121,18 @@ app.post('/generate-inventory-report-pdf', (req, res) => {
     let totalPotentialValue = 0;
     let totalItems = 0;
     let itemsPerPage = 20;
+    const displayItems = reportData.items.slice(0, itemsPerPage);
     
     // Inventory items
-    reportData.items.slice(0, itemsPerPage).forEach((item, index) => {
-      const inventoryValue = item.quantity * item.unitCost;
-      const potentialValue = item.quantity * item.unitPrice;
+    displayItems.forEach((item, index) => {
+      const quantity = item.quantity || 0;
+      const unitCost = item.unitCost || 0;
+      const unitPrice = item.unitPrice || 0;
+      const inventoryValue = quantity * unitCost;
+      const potentialValue = quantity * unitPrice;
       totalInventoryValue += inventoryValue;
       totalPotentialValue += potentialValue;
-      totalItems += item.quantity;
+      totalItems += quantity;
       
       const isEven = index % 2 === 0;
       
@@ -1063,12 +1147,12 @@ app.post('/generate-inventory-report-pdf', (req, res) => {
          .font('Helvetica')
          .fontSize(8)
          .text((index + 1).toString(), 55, yPosition)
-         .text(item.sku, 70, yPosition)
-         .text(item.name.length > 25 ? item.name.substring(0, 22) + '...' : item.name, 120, yPosition)
-         .text(item.category.length > 15 ? item.category.substring(0, 12) + '...' : item.category, 220, yPosition)
-         .text(item.quantity.toString(), 300, yPosition)
-         .text(`RM ${item.unitCost.toFixed(2)}`, 340, yPosition)
-         .text(`RM ${item.unitPrice.toFixed(2)}`, 390, yPosition)
+         .text(item.sku || 'N/A', 70, yPosition)
+         .text((item.name || 'Unnamed Item').length > 25 ? (item.name || 'Unnamed Item').substring(0, 22) + '...' : (item.name || 'Unnamed Item'), 120, yPosition)
+         .text((item.category || 'N/A').length > 15 ? (item.category || 'N/A').substring(0, 12) + '...' : (item.category || 'N/A'), 220, yPosition)
+         .text(quantity.toString(), 300, yPosition)
+         .text(`RM ${unitCost.toFixed(2)}`, 340, yPosition)
+         .text(`RM ${unitPrice.toFixed(2)}`, 390, yPosition)
          .text(`RM ${inventoryValue.toFixed(2)}`, 450, yPosition);
       
       yPosition += 20;
@@ -1603,20 +1687,20 @@ function getDashboardPage() {
         let totalPotentialValue = 0;
 
         inventoryItems.forEach((item, i) => {
-          const inventoryValue = item.quantity * item.unitCost;
-          const potentialValue = item.quantity * item.unitPrice;
+          const inventoryValue = (item.quantity || 0) * (item.unitCost || 0);
+          const potentialValue = (item.quantity || 0) * (item.unitPrice || 0);
           totalInventoryValue += inventoryValue;
           totalPotentialValue += potentialValue;
 
           body.innerHTML += \`
             <tr>
               <td>\${i + 1}</td>
-              <td><strong>\${item.sku}</strong></td>
-              <td>\${item.name}</td>
-              <td><span class="category-tag">\${item.category}</span></td>
-              <td><span class="quantity-badge">\${item.quantity}</span></td>
-              <td>RM \${item.unitCost.toFixed(2)}</td>
-              <td>RM \${item.unitPrice.toFixed(2)}</td>
+              <td><strong>\${item.sku || 'N/A'}</strong></td>
+              <td>\${item.name || 'Unnamed Item'}</td>
+              <td><span class="category-tag">\${item.category || 'Uncategorized'}</span></td>
+              <td><span class="quantity-badge">\${item.quantity || 0}</span></td>
+              <td>RM \${(item.unitCost || 0).toFixed(2)}</td>
+              <td>RM \${(item.unitPrice || 0).toFixed(2)}</td>
               <td><strong class="value-text">RM \${inventoryValue.toFixed(2)}</strong></td>
               <td><strong class="potential-text">RM \${potentialValue.toFixed(2)}</strong></td>
               <td class="date-text">\${item.dateAdded || new Date(item.createdAt).toLocaleDateString()}</td>
@@ -1656,12 +1740,12 @@ function getDashboardPage() {
       if (!item) return;
 
       document.getElementById('editItemId').value = item._id;
-      document.getElementById('editItemSKU').value = item.sku;
-      document.getElementById('editItemName').value = item.name;
-      document.getElementById('editItemCategory').value = item.category;
-      document.getElementById('editItemQty').value = item.quantity;
-      document.getElementById('editItemUnitCost').value = item.unitCost;
-      document.getElementById('editItemUnitPrice').value = item.unitPrice;
+      document.getElementById('editItemSKU').value = item.sku || '';
+      document.getElementById('editItemName').value = item.name || '';
+      document.getElementById('editItemCategory').value = item.category || '';
+      document.getElementById('editItemQty').value = item.quantity || 1;
+      document.getElementById('editItemUnitCost').value = item.unitCost || 0;
+      document.getElementById('editItemUnitPrice').value = item.unitPrice || 0;
 
       document.getElementById('editModal').style.display = 'block';
     }
@@ -1678,9 +1762,9 @@ function getDashboardPage() {
         sku: document.getElementById('editItemSKU').value,
         name: document.getElementById('editItemName').value,
         category: document.getElementById('editItemCategory').value,
-        quantity: parseInt(document.getElementById('editItemQty').value),
-        unitCost: parseFloat(document.getElementById('editItemUnitCost').value),
-        unitPrice: parseFloat(document.getElementById('editItemUnitPrice').value)
+        quantity: parseInt(document.getElementById('editItemQty').value) || 1,
+        unitCost: parseFloat(document.getElementById('editItemUnitCost').value) || 0,
+        unitPrice: parseFloat(document.getElementById('editItemUnitPrice').value) || 0
       };
 
       try {
@@ -1710,9 +1794,9 @@ function getDashboardPage() {
         sku: document.getElementById('itemSKU').value,
         name: document.getElementById('itemName').value,
         category: document.getElementById('itemCategory').value,
-        quantity: parseInt(document.getElementById('itemQty').value),
-        unitCost: parseFloat(document.getElementById('itemUnitCost').value),
-        unitPrice: parseFloat(document.getElementById('itemUnitPrice').value)
+        quantity: parseInt(document.getElementById('itemQty').value) || 1,
+        unitCost: parseFloat(document.getElementById('itemUnitCost').value) || 0,
+        unitPrice: parseFloat(document.getElementById('itemUnitPrice').value) || 0
       };
 
       try {
@@ -1783,8 +1867,8 @@ function getDashboardPage() {
         let totalPotentialValue = 0;
         
         items.forEach(item => {
-          totalInventoryValue += item.quantity * item.unitCost;
-          totalPotentialValue += item.quantity * item.unitPrice;
+          totalInventoryValue += (item.quantity || 0) * (item.unitCost || 0);
+          totalPotentialValue += (item.quantity || 0) * (item.unitPrice || 0);
         });
 
         const dateRange = dateFrom && dateTo ? \`\${dateFrom} to \${dateTo}\` : 'All Items';
@@ -1916,11 +2000,11 @@ function getReferencePage() {
           itemDiv.innerHTML = \`
             <div style="display: flex; justify-content: space-between; align-items: center;">
               <div>
-                <strong>\${item.name}</strong> (\${item.sku})<br>
-                <small>Category: \${item.category} | Available: \${item.quantity} | Price: RM \${item.unitPrice.toFixed(2)}</small>
+                <strong>\${item.name || 'Unnamed Item'}</strong> (\${item.sku || 'N/A'})<br>
+                <small>Category: \${item.category || 'N/A'} | Available: \${item.quantity || 0} | Price: RM \${(item.unitPrice || 0).toFixed(2)}</small>
               </div>
               <div>
-                <input type="number" id="qty-\${index}" min="1" max="\${item.quantity}" value="1" style="width: 80px; margin-right: 10px;">
+                <input type="number" id="qty-\${index}" min="1" max="\${item.quantity || 0}" value="1" style="width: 80px; margin-right: 10px;">
                 <button class="btn small" onclick="addToReference(\${index})">Add to Report</button>
               </div>
             </div>
@@ -1940,8 +2024,8 @@ function getReferencePage() {
       const item = availableItems[index];
       const quantity = parseInt(document.getElementById(\`qty-\${index}\`).value) || 1;
       
-      if (quantity > item.quantity) {
-        alert(\`Only \${item.quantity} items available!\`);
+      if (quantity > (item.quantity || 0)) {
+        alert(\`Only \${item.quantity || 0} items available!\`);
         return;
       }
 
@@ -1949,7 +2033,11 @@ function getReferencePage() {
       if (existingIndex > -1) {
         selectedReferenceItems[existingIndex].invoiceQty = quantity;
       } else {
-        selectedReferenceItems.push({ index: index, ...item, invoiceQty: quantity });
+        selectedReferenceItems.push({ 
+          index: index, 
+          ...item, 
+          invoiceQty: quantity 
+        });
       }
       
       updateReferenceDisplay();
@@ -1962,7 +2050,9 @@ function getReferencePage() {
       
       let total = 0;
       selectedReferenceItems.forEach((item, i) => {
-        const itemTotal = item.invoiceQty * item.unitPrice;
+        const quantity = item.invoiceQty || item.quantity || 1;
+        const unitPrice = item.unitPrice || 0;
+        const itemTotal = quantity * unitPrice;
         total += itemTotal;
         
         const itemDiv = document.createElement('div');
@@ -1970,8 +2060,8 @@ function getReferencePage() {
         itemDiv.innerHTML = \`
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
-              <strong>\${item.name}</strong> (\${item.sku})<br>
-              <small>Qty: \${item.invoiceQty} × RM \${item.unitPrice.toFixed(2)} = RM \${itemTotal.toFixed(2)}</small>
+              <strong>\${item.name || 'Unnamed Item'}</strong> (\${item.sku || 'N/A'})<br>
+              <small>Qty: \${quantity} × RM \${unitPrice.toFixed(2)} = RM \${itemTotal.toFixed(2)}</small>
             </div>
             <button class="btn small danger" onclick="removeFromReference(\${i})">Remove</button>
           </div>
@@ -2002,7 +2092,7 @@ function getReferencePage() {
       const referenceData = {
         date: new Date().toLocaleString(),
         items: selectedReferenceItems,
-        total: parseFloat(document.getElementById('referenceTotal').textContent)
+        total: parseFloat(document.getElementById('referenceTotal').textContent) || 0
       };
 
       try {
@@ -2038,6 +2128,7 @@ function getReferencePage() {
           window.URL.revokeObjectURL(url);
           
           alert('Reference Report PDF generated successfully! Report number: ' + referenceData.reportNumber);
+          clearReference(); // Clear after successful download
         } else {
           throw new Error('PDF generation failed');
         }
@@ -2143,8 +2234,8 @@ function getPurchasePage() {
           itemDiv.innerHTML = \`
             <div style="display: flex; justify-content: space-between; align-items: center;">
               <div>
-                <strong>\${item.name}</strong> (\${item.sku})<br>
-                <small>Category: \${item.category} | Current Stock: \${item.quantity} | Cost: RM \${item.unitCost.toFixed(2)}</small>
+                <strong>\${item.name || 'Unnamed Item'}</strong> (\${item.sku || 'N/A'})<br>
+                <small>Category: \${item.category || 'N/A'} | Current Stock: \${item.quantity || 0} | Cost: RM \${(item.unitCost || 0).toFixed(2)}</small>
               </div>
               <div>
                 <input type="number" id="purchase-qty-\${index}" min="1" value="1" style="width: 80px; margin-right: 10px;">
@@ -2174,10 +2265,10 @@ function getPurchasePage() {
         selectedPurchaseItems.push({ 
           index: index, 
           itemId: item._id,
-          name: item.name,
-          sku: item.sku,
-          category: item.category,
-          unitCost: item.unitCost,
+          name: item.name || 'Unnamed Item',
+          sku: item.sku || 'N/A',
+          category: item.category || 'N/A',
+          unitCost: item.unitCost || 0,
           quantity: quantity
         });
       }
@@ -2192,7 +2283,7 @@ function getPurchasePage() {
       
       let total = 0;
       selectedPurchaseItems.forEach((item, i) => {
-        const itemTotal = item.quantity * item.unitCost;
+        const itemTotal = (item.quantity || 1) * (item.unitCost || 0);
         total += itemTotal;
         
         const itemDiv = document.createElement('div');
@@ -2200,8 +2291,8 @@ function getPurchasePage() {
         itemDiv.innerHTML = \`
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
-              <strong>\${item.name}</strong> (\${item.sku})<br>
-              <small>Qty: \${item.quantity} × RM \${item.unitCost.toFixed(2)} = RM \${itemTotal.toFixed(2)}</small>
+              <strong>\${item.name || 'Unnamed Item'}</strong> (\${item.sku || 'N/A'})<br>
+              <small>Qty: \${item.quantity || 1} × RM \${(item.unitCost || 0).toFixed(2)} = RM \${itemTotal.toFixed(2)}</small>
             </div>
             <button class="btn small danger" onclick="removeFromPurchase(\${i})">Remove</button>
           </div>
@@ -2235,7 +2326,7 @@ function getPurchasePage() {
           date: document.getElementById('purchaseDate').value || new Date().toLocaleString(),
           supplier: document.getElementById('supplier').value || 'N/A',
           items: selectedPurchaseItems,
-          total: parseFloat(document.getElementById('purchaseTotal').textContent)
+          total: parseFloat(document.getElementById('purchaseTotal').textContent) || 0
         };
         
         const response = await fetch('/api/purchases', {
@@ -2250,11 +2341,13 @@ function getPurchasePage() {
           currentPurchaseData = data.purchaseData;
           alert('Purchase processed successfully! Purchase Number: ' + data.purchaseNumber);
           document.getElementById('downloadPdf').style.display = 'inline-block';
-          loadAvailableItems();
+          clearPurchase(); // Clear after successful processing
+          loadAvailableItems(); // Refresh available items
         } else {
           alert('Failed to process purchase: ' + data.error);
         }
       } catch (error) {
+        console.error('Purchase error:', error);
         alert('Failed to process purchase: ' + error.message);
       }
     }
@@ -2281,7 +2374,8 @@ function getPurchasePage() {
           a.click();
           window.URL.revokeObjectURL(url);
         } else {
-          throw new Error('PDF generation failed');
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'PDF generation failed');
         }
       } catch (error) {
         alert('Error generating PDF: ' + error.message);
@@ -2385,11 +2479,11 @@ function getSalesPage() {
           itemDiv.innerHTML = \`
             <div style="display: flex; justify-content: space-between; align-items: center;">
               <div>
-                <strong>\${item.name}</strong> (\${item.sku})<br>
-                <small>Category: \${item.category} | Current Stock: \${item.quantity} | Price: RM \${item.unitPrice.toFixed(2)}</small>
+                <strong>\${item.name || 'Unnamed Item'}</strong> (\${item.sku || 'N/A'})<br>
+                <small>Category: \${item.category || 'N/A'} | Current Stock: \${item.quantity || 0} | Price: RM \${(item.unitPrice || 0).toFixed(2)}</small>
               </div>
               <div>
-                <input type="number" id="sales-qty-\${index}" min="1" max="\${item.quantity}" value="1" style="width: 80px; margin-right: 10px;">
+                <input type="number" id="sales-qty-\${index}" min="1" max="\${item.quantity || 0}" value="1" style="width: 80px; margin-right: 10px;">
                 <button class="btn small" onclick="addToSale(\${index})">Add to Sale</button>
               </div>
             </div>
@@ -2409,8 +2503,8 @@ function getSalesPage() {
       const item = availableItems[index];
       const quantity = parseInt(document.getElementById(\`sales-qty-\${index}\`).value) || 1;
       
-      if (quantity > item.quantity) {
-        alert(\`Only \${item.quantity} items available in stock!\`);
+      if (quantity > (item.quantity || 0)) {
+        alert(\`Only \${item.quantity || 0} items available in stock!\`);
         return;
       }
 
@@ -2421,10 +2515,10 @@ function getSalesPage() {
         selectedSalesItems.push({ 
           index: index, 
           itemId: item._id,
-          name: item.name,
-          sku: item.sku,
-          category: item.category,
-          unitPrice: item.unitPrice,
+          name: item.name || 'Unnamed Item',
+          sku: item.sku || 'N/A',
+          category: item.category || 'N/A',
+          unitPrice: item.unitPrice || 0,
           quantity: quantity
         });
       }
@@ -2439,7 +2533,7 @@ function getSalesPage() {
       
       let total = 0;
       selectedSalesItems.forEach((item, i) => {
-        const itemTotal = item.quantity * item.unitPrice;
+        const itemTotal = (item.quantity || 1) * (item.unitPrice || 0);
         total += itemTotal;
         
         const itemDiv = document.createElement('div');
@@ -2447,8 +2541,8 @@ function getSalesPage() {
         itemDiv.innerHTML = \`
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
-              <strong>\${item.name}</strong> (\${item.sku})<br>
-              <small>Qty: \${item.quantity} × RM \${item.unitPrice.toFixed(2)} = RM \${itemTotal.toFixed(2)}</small>
+              <strong>\${item.name || 'Unnamed Item'}</strong> (\${item.sku || 'N/A'})<br>
+              <small>Qty: \${item.quantity || 1} × RM \${(item.unitPrice || 0).toFixed(2)} = RM \${itemTotal.toFixed(2)}</small>
             </div>
             <button class="btn small danger" onclick="removeFromSale(\${i})">Remove</button>
           </div>
@@ -2482,7 +2576,7 @@ function getSalesPage() {
           date: document.getElementById('salesDate').value || new Date().toLocaleString(),
           customer: document.getElementById('customer').value || 'N/A',
           items: selectedSalesItems,
-          total: parseFloat(document.getElementById('salesTotal').textContent)
+          total: parseFloat(document.getElementById('salesTotal').textContent) || 0
         };
         
         const response = await fetch('/api/sales', {
@@ -2498,10 +2592,13 @@ function getSalesPage() {
           alert('Sale processed successfully! Sales Number: ' + data.salesNumber);
           // Show download button after successful sale processing
           document.getElementById('downloadPdf').style.display = 'inline-block';
+          clearSale(); // Clear items after successful processing
+          loadAvailableItems(); // Refresh available items
         } else {
           alert('Failed to process sale: ' + data.error);
         }
       } catch (error) {
+        console.error('Sales error:', error);
         alert('Failed to process sale: ' + error.message);
       }
     }
@@ -2528,7 +2625,8 @@ function getSalesPage() {
           a.click();
           window.URL.revokeObjectURL(url);
         } else {
-          throw new Error('PDF generation failed');
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'PDF generation failed');
         }
       } catch (error) {
         alert('Error generating PDF: ' + error.message);
@@ -2613,9 +2711,9 @@ function getStatementPage() {
             reportDiv.innerHTML = \`
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                  <strong>\${report.id}</strong><br>
-                  <small>Generated: \${report.date}</small><br>
-                  <small>Items: \${report.items.length} | \${report.totalInventoryValue} | \${report.totalPotentialValue}</small>
+                  <strong>\${report.id || 'N/A'}</strong><br>
+                  <small>Generated: \${report.date || 'N/A'}</small><br>
+                  <small>Items: \${report.items?.length || 0} | \${report.totalInventoryValue || 'RM 0.00'} | \${report.totalPotentialValue || 'RM 0.00'}</small>
                 </div>
                 <div>
                   <button class="btn small" onclick="downloadReport(\${index})">📥 Download</button>
@@ -2649,9 +2747,9 @@ function getStatementPage() {
             reportDiv.innerHTML = \`
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                  <strong>\${report.reportNumber}</strong><br>
-                  <small>Date: \${report.date}</small><br>
-                  <small>Items: \${report.items.length} | Total: RM \${report.total.toFixed(2)}</small>
+                  <strong>\${report.reportNumber || 'N/A'}</strong><br>
+                  <small>Date: \${report.date || 'N/A'}</small><br>
+                  <small>Items: \${report.items?.length || 0} | Total: RM \${(report.total || 0).toFixed(2)}</small>
                 </div>
                 <div>
                   <button class="btn small" onclick="downloadReferenceReportPDF('\${report.reportNumber}', \${index})">📥 PDF</button>
@@ -2685,9 +2783,9 @@ function getStatementPage() {
             purchaseDiv.innerHTML = \`
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                  <strong>\${purchase.purchaseNumber}</strong><br>
-                  <small>Date: \${purchase.date} | Supplier: \${purchase.supplier}</small><br>
-                  <small>Items: \${purchase.items.length} | Total: RM \${purchase.total.toFixed(2)}</small>
+                  <strong>\${purchase.purchaseNumber || 'N/A'}</strong><br>
+                  <small>Date: \${purchase.date || 'N/A'} | Supplier: \${purchase.supplier || 'N/A'}</small><br>
+                  <small>Items: \${purchase.items?.length || 0} | Total: RM \${(purchase.total || 0).toFixed(2)}</small>
                 </div>
                 <div>
                   <button class="btn small" onclick="downloadPurchasePDF('\${purchase._id}', \${index})">📥 PDF</button>
@@ -2720,9 +2818,9 @@ function getStatementPage() {
             saleDiv.innerHTML = \`
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                  <strong>\${sale.salesNumber}</strong><br>
-                  <small>Date: \${sale.date} | Customer: \${sale.customer}</small><br>
-                  <small>Items: \${sale.items.length} | Total: RM \${sale.total.toFixed(2)}</small>
+                  <strong>\${sale.salesNumber || 'N/A'}</strong><br>
+                  <small>Date: \${sale.date || 'N/A'} | Customer: \${sale.customer || 'N/A'}</small><br>
+                  <small>Items: \${sale.items?.length || 0} | Total: RM \${(sale.total || 0).toFixed(2)}</small>
                 </div>
                 <div>
                   <button class="btn small" onclick="downloadSalePDF('\${sale._id}', \${index})">📥 PDF</button>
@@ -2755,9 +2853,12 @@ function getStatementPage() {
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = \`inventory-report-\${report.id}.pdf\`;
+            a.download = \`inventory-report-\${report.id || Date.now()}.pdf\`;
             a.click();
             window.URL.revokeObjectURL(url);
+          } else {
+            const errorData = await pdfResponse.json();
+            throw new Error(errorData.error || 'PDF generation failed');
           }
         }
       } catch (error) {
@@ -2783,9 +2884,12 @@ function getStatementPage() {
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = \`reference-report-\${report.reportNumber}.pdf\`;
+            a.download = \`reference-report-\${report.reportNumber || Date.now()}.pdf\`;
             a.click();
             window.URL.revokeObjectURL(url);
+          } else {
+            const errorData = await pdfResponse.json();
+            throw new Error(errorData.error || 'PDF generation failed');
           }
         }
       } catch (error) {
@@ -2811,9 +2915,12 @@ function getStatementPage() {
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = \`purchase-order-\${purchase.purchaseNumber}.pdf\`;
+            a.download = \`purchase-order-\${purchase.purchaseNumber || Date.now()}.pdf\`;
             a.click();
             window.URL.revokeObjectURL(url);
+          } else {
+            const errorData = await pdfResponse.json();
+            throw new Error(errorData.error || 'PDF generation failed');
           }
         }
       } catch (error) {
@@ -2839,9 +2946,12 @@ function getStatementPage() {
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = \`sales-invoice-\${sale.salesNumber}.pdf\`;
+            a.download = \`sales-invoice-\${sale.salesNumber || Date.now()}.pdf\`;
             a.click();
             window.URL.revokeObjectURL(url);
+          } else {
+            const errorData = await pdfResponse.json();
+            throw new Error(errorData.error || 'PDF generation failed');
           }
         }
       } catch (error) {
@@ -3584,4 +3694,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('   ✅ Complete Multi-User System');
   console.log('   ✅ Enterprise-Level Inventory Management');
   console.log('   ✅ Sequential Numbering System: REF-0000000000001, PUR-0000000000001, SAL-0000000000001');
+  console.log('   ✅ FIXED: Cannot read properties of undefined (reading "toString") errors');
+  console.log('   ✅ FIXED: PDF generation errors with proper error handling');
+  console.log('   ✅ FIXED: Purchase and Sales processing errors');
 });
