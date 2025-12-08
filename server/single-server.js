@@ -76,7 +76,6 @@ async function getNextSequence(collectionName) {
     return result.value ? result.value.sequence_value.toString().padStart(13, '0') : '1'.padStart(13, '0');
   } catch (error) {
     console.error('Error getting sequence:', error);
-    // Fallback to timestamp if counter fails
     return Date.now().toString().slice(-13).padStart(13, '0');
   }
 }
@@ -102,7 +101,7 @@ async function connectDB() {
       }
     }
     
-    // Initialize counters if they don't exist
+    // Initialize counters
     await initializeCounters();
   } catch (error) {
     console.error('❌ MongoDB connection failed:', error);
@@ -112,28 +111,9 @@ async function connectDB() {
 async function initializeCounters() {
   try {
     const counters = db.collection('counters');
-    
-    // Initialize reference_reports counter
-    await counters.updateOne(
-      { _id: 'reference_reports' },
-      { $setOnInsert: { sequence_value: 1 } },
-      { upsert: true }
-    );
-    
-    // Initialize purchases counter
-    await counters.updateOne(
-      { _id: 'purchases' },
-      { $setOnInsert: { sequence_value: 1 } },
-      { upsert: true }
-    );
-    
-    // Initialize sales counter
-    await counters.updateOne(
-      { _id: 'sales' },
-      { $setOnInsert: { sequence_value: 1 } },
-      { upsert: true }
-    );
-    
+    await counters.updateOne({ _id: 'reference_reports' }, { $setOnInsert: { sequence_value: 1 } }, { upsert: true });
+    await counters.updateOne({ _id: 'purchases' }, { $setOnInsert: { sequence_value: 1 } }, { upsert: true });
+    await counters.updateOne({ _id: 'sales' }, { $setOnInsert: { sequence_value: 1 } }, { upsert: true });
     console.log('✅ Counters initialized');
   } catch (error) {
     console.error('Error initializing counters:', error);
@@ -154,7 +134,6 @@ app.post('/api/login', async (req, res) => {
     const user = await db.collection('users').findOne({ username });
     
     if (user && user.password === password) {
-      // Record login history
       await db.collection('login_history').insertOne({
         username: user.username,
         loginTime: new Date(),
@@ -200,7 +179,6 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
-// Login History API - Shows all users
 app.get('/api/login-history', async (req, res) => {
   try {
     const user = JSON.parse(req.headers.user || '{}');
@@ -208,7 +186,6 @@ app.get('/api/login-history', async (req, res) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // Get all login history (not just current user)
     const history = await db.collection('login_history')
       .find({})
       .sort({ loginTime: -1 })
@@ -221,30 +198,28 @@ app.get('/api/login-history', async (req, res) => {
   }
 });
 
-// Inventory APIs
+// ==========================================
+// REFACTORED INVENTORY APIs (NEW SCHEMA)
+// ==========================================
+
 app.get('/api/inventory', async (req, res) => {
   try {
     const { search, dateFrom, dateTo } = req.query;
     let query = {};
     
-    // Search functionality
+    // Search functionality using NEW FIELD NAMES
     if (search) {
       query.$or = [
-        { sku: { $regex: search, $options: 'i' } },
+        { ref_code: { $regex: search, $options: 'i' } }, // Changed from 'sku'
         { name: { $regex: search, $options: 'i' } },
         { category: { $regex: search, $options: 'i' } }
       ];
     }
     
-    // Date range filter
     if (dateFrom || dateTo) {
       query.createdAt = {};
-      if (dateFrom) {
-        query.createdAt.$gte = new Date(dateFrom);
-      }
-      if (dateTo) {
-        query.createdAt.$lte = new Date(dateTo + 'T23:59:59.999Z');
-      }
+      if (dateFrom) query.createdAt.$gte = new Date(dateFrom);
+      if (dateTo) query.createdAt.$lte = new Date(dateTo + 'T23:59:59.999Z');
     }
     
     const items = await db.collection('inventory').find(query).toArray();
@@ -256,6 +231,7 @@ app.get('/api/inventory', async (req, res) => {
 
 app.post('/api/inventory/add', async (req, res) => {
   try {
+    // We expect the frontend to send ref_code, qty_on_hand, etc.
     const item = {
       ...req.body,
       dateAdded: new Date().toLocaleDateString(),
@@ -274,7 +250,6 @@ app.put('/api/inventory/:id', async (req, res) => {
     const { id } = req.params;
     const updateData = { ...req.body };
     
-    // Remove fields that shouldn't be updated
     delete updateData._id;
     delete updateData.createdAt;
     
@@ -307,7 +282,160 @@ app.delete('/api/inventory/:id', async (req, res) => {
   }
 });
 
-// Reference Reports APIs (formerly invoices)
+// ==========================================
+// REFACTORED PURCHASE & SALES APIs
+// ==========================================
+
+app.post('/api/purchases', async (req, res) => {
+  try {
+    const purchaseNumber = await getNextSequence('purchases');
+    const purchaseData = {
+      ...req.body.purchaseData,
+      purchaseNumber: `PUR-${purchaseNumber}`,
+      type: 'purchase',
+      createdAt: new Date()
+    };
+    
+    purchaseData.items = purchaseData.items.map(item => ({
+      ...item,
+      itemId: typeof item.itemId === 'string' ? new ObjectId(item.itemId) : item.itemId
+    }));
+    
+    const result = await db.collection('purchases').insertOne(purchaseData);
+    
+    // Update inventory quantities using NEW SCHEMA
+    for (const item of purchaseData.items) {
+      const existingItem = await db.collection('inventory').findOne({ _id: item.itemId });
+      
+      if (existingItem) {
+        // Use 'qty_on_hand'
+        const newQuantity = (existingItem.qty_on_hand || 0) + (item.quantity || 0);
+        await db.collection('inventory').updateOne(
+          { _id: item.itemId },
+          { $set: { qty_on_hand: newQuantity } }
+        );
+      }
+    }
+    
+    res.json({ 
+      message: 'Purchase recorded successfully',
+      purchaseNumber: purchaseData.purchaseNumber,
+      purchaseData: purchaseData,
+      id: result.insertedId.toString()
+    });
+  } catch (error) {
+    console.error('Purchase error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/sales', async (req, res) => {
+  try {
+    const salesNumber = await getNextSequence('sales');
+    const salesData = {
+      ...req.body.salesData,
+      salesNumber: `SAL-${salesNumber}`,
+      type: 'sale',
+      createdAt: new Date()
+    };
+    
+    salesData.items = salesData.items.map(item => ({
+      ...item,
+      itemId: typeof item.itemId === 'string' ? new ObjectId(item.itemId) : item.itemId
+    }));
+    
+    const result = await db.collection('sales').insertOne(salesData);
+    
+    // Update inventory quantities using NEW SCHEMA
+    for (const item of salesData.items) {
+      const existingItem = await db.collection('inventory').findOne({ _id: item.itemId });
+      
+      if (existingItem) {
+        // Use 'qty_on_hand'
+        const newQuantity = (existingItem.qty_on_hand || 0) - (item.quantity || 0);
+        if (newQuantity < 0) {
+          return res.status(400).json({ error: 'Insufficient stock for ' + existingItem.name });
+        }
+        
+        await db.collection('inventory').updateOne(
+          { _id: item.itemId },
+          { $set: { qty_on_hand: newQuantity } }
+        );
+      }
+    }
+    
+    res.json({ 
+      message: 'Sale recorded successfully',
+      salesNumber: salesData.salesNumber,
+      salesData: salesData,
+      id: result.insertedId.toString()
+    });
+  } catch (error) {
+    console.error('Sales error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Standard Getters for History
+app.get('/api/purchases', async (req, res) => {
+  try {
+    const purchases = await db.collection('purchases').find({}).sort({ createdAt: -1 }).toArray();
+    res.json(purchases);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/purchases/:id', async (req, res) => {
+  try {
+    const purchase = await db.collection('purchases').findOne({ _id: new ObjectId(req.params.id) });
+    if (!purchase) return res.status(404).json({ error: 'Purchase not found' });
+    res.json(purchase);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/purchases/:id', async (req, res) => {
+  try {
+    const result = await db.collection('purchases').deleteOne({ _id: new ObjectId(req.params.id) });
+    if (result.deletedCount === 0) return res.status(404).json({ error: 'Purchase not found' });
+    res.json({ message: 'Purchase deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/sales', async (req, res) => {
+  try {
+    const sales = await db.collection('sales').find({}).sort({ createdAt: -1 }).toArray();
+    res.json(sales);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/sales/:id', async (req, res) => {
+  try {
+    const sale = await db.collection('sales').findOne({ _id: new ObjectId(req.params.id) });
+    if (!sale) return res.status(404).json({ error: 'Sale not found' });
+    res.json(sale);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/sales/:id', async (req, res) => {
+  try {
+    const result = await db.collection('sales').deleteOne({ _id: new ObjectId(req.params.id) });
+    if (result.deletedCount === 0) return res.status(404).json({ error: 'Sale not found' });
+    res.json({ message: 'Sale deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Reference Reports (Reference Code Logic applied here too)
 app.get('/api/reference-reports', async (req, res) => {
   try {
     const referenceReports = await db.collection('reference_reports').find({}).toArray();
@@ -322,11 +450,7 @@ app.get('/api/reference-reports/:id', async (req, res) => {
     const referenceReport = await db.collection('reference_reports').findOne({ 
       _id: new ObjectId(req.params.id) 
     });
-    
-    if (!referenceReport) {
-      return res.status(404).json({ error: 'Reference report not found' });
-    }
-    
+    if (!referenceReport) return res.status(404).json({ error: 'Reference report not found' });
     res.json(referenceReport);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -358,188 +482,14 @@ app.post('/api/reference-reports/add', async (req, res) => {
 app.delete('/api/reference-reports/:id', async (req, res) => {
   try {
     const result = await db.collection('reference_reports').deleteOne({ _id: new ObjectId(req.params.id) });
-    
-    if (result.deletedCount === 0) {
-      return res.status(404).json({ error: 'Report not found' });
-    }
-    
+    if (result.deletedCount === 0) return res.status(404).json({ error: 'Report not found' });
     res.json({ message: 'Report deleted successfully' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Purchase APIs
-app.post('/api/purchases', async (req, res) => {
-  try {
-    const purchaseNumber = await getNextSequence('purchases');
-    const purchaseData = {
-      ...req.body.purchaseData,
-      purchaseNumber: `PUR-${purchaseNumber}`,
-      type: 'purchase',
-      createdAt: new Date()
-    };
-    
-    // Fix: Ensure itemId is properly converted to ObjectId
-    purchaseData.items = purchaseData.items.map(item => ({
-      ...item,
-      itemId: typeof item.itemId === 'string' ? new ObjectId(item.itemId) : item.itemId
-    }));
-    
-    const result = await db.collection('purchases').insertOne(purchaseData);
-    
-    // Update inventory quantities
-    for (const item of purchaseData.items) {
-      const existingItem = await db.collection('inventory').findOne({ _id: item.itemId });
-      
-      if (existingItem) {
-        const newQuantity = (existingItem.quantity || 0) + (item.quantity || 0);
-        await db.collection('inventory').updateOne(
-          { _id: item.itemId },
-          { $set: { quantity: newQuantity } }
-        );
-      }
-    }
-    
-    res.json({ 
-      message: 'Purchase recorded successfully',
-      purchaseNumber: purchaseData.purchaseNumber,
-      purchaseData: purchaseData,
-      id: result.insertedId.toString()
-    });
-  } catch (error) {
-    console.error('Purchase error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/purchases', async (req, res) => {
-  try {
-    const purchases = await db.collection('purchases').find({}).sort({ createdAt: -1 }).toArray();
-    res.json(purchases);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/purchases/:id', async (req, res) => {
-  try {
-    const purchase = await db.collection('purchases').findOne({ 
-      _id: new ObjectId(req.params.id) 
-    });
-    
-    if (!purchase) {
-      return res.status(404).json({ error: 'Purchase not found' });
-    }
-    
-    res.json(purchase);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.delete('/api/purchases/:id', async (req, res) => {
-  try {
-    const result = await db.collection('purchases').deleteOne({ _id: new ObjectId(req.params.id) });
-    
-    if (result.deletedCount === 0) {
-      return res.status(404).json({ error: 'Purchase not found' });
-    }
-    
-    res.json({ message: 'Purchase deleted successfully' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Sales APIs
-app.post('/api/sales', async (req, res) => {
-  try {
-    const salesNumber = await getNextSequence('sales');
-    const salesData = {
-      ...req.body.salesData,
-      salesNumber: `SAL-${salesNumber}`,
-      type: 'sale',
-      createdAt: new Date()
-    };
-    
-    // Fix: Ensure itemId is properly converted to ObjectId
-    salesData.items = salesData.items.map(item => ({
-      ...item,
-      itemId: typeof item.itemId === 'string' ? new ObjectId(item.itemId) : item.itemId
-    }));
-    
-    const result = await db.collection('sales').insertOne(salesData);
-    
-    // Update inventory quantities
-    for (const item of salesData.items) {
-      const existingItem = await db.collection('inventory').findOne({ _id: item.itemId });
-      
-      if (existingItem) {
-        const newQuantity = (existingItem.quantity || 0) - (item.quantity || 0);
-        if (newQuantity < 0) {
-          return res.status(400).json({ error: 'Insufficient stock for ' + existingItem.name });
-        }
-        
-        await db.collection('inventory').updateOne(
-          { _id: item.itemId },
-          { $set: { quantity: newQuantity } }
-        );
-      }
-    }
-    
-    res.json({ 
-      message: 'Sale recorded successfully',
-      salesNumber: salesData.salesNumber,
-      salesData: salesData,
-      id: result.insertedId.toString()
-    });
-  } catch (error) {
-    console.error('Sales error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/sales', async (req, res) => {
-  try {
-    const sales = await db.collection('sales').find({}).sort({ createdAt: -1 }).toArray();
-    res.json(sales);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/sales/:id', async (req, res) => {
-  try {
-    const sale = await db.collection('sales').findOne({ 
-      _id: new ObjectId(req.params.id) 
-    });
-    
-    if (!sale) {
-      return res.status(404).json({ error: 'Sale not found' });
-    }
-    
-    res.json(sale);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.delete('/api/sales/:id', async (req, res) => {
-  try {
-    const result = await db.collection('sales').deleteOne({ _id: new ObjectId(req.params.id) });
-    
-    if (result.deletedCount === 0) {
-      return res.status(404).json({ error: 'Sale not found' });
-    }
-    
-    res.json({ message: 'Sale deleted successfully' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Statements/Reports APIs
+// Statements
 app.get('/api/statements', async (req, res) => {
   try {
     const statements = await db.collection('statements').find({}).toArray();
@@ -564,33 +514,21 @@ app.post('/api/statements/add', async (req, res) => {
 app.delete('/api/statements/:id', async (req, res) => {
   try {
     const result = await db.collection('statements').deleteOne({ _id: new ObjectId(req.params.id) });
-    
-    if (result.deletedCount === 0) {
-      return res.status(404).json({ error: 'Report not found' });
-    }
-    
+    if (result.deletedCount === 0) return res.status(404).json({ error: 'Report not found' });
     res.json({ message: 'Report deleted successfully' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// User management APIs
+// User Management
 app.put('/api/user/password', async (req, res) => {
   try {
     const { username, currentPassword, newPassword } = req.body;
-    
     const user = await db.collection('users').findOne({ username, password: currentPassword });
+    if (!user) return res.status(400).json({ error: 'Current password is incorrect' });
     
-    if (!user) {
-      return res.status(400).json({ error: 'Current password is incorrect' });
-    }
-    
-    await db.collection('users').updateOne(
-      { username },
-      { $set: { password: newPassword } }
-    );
-    
+    await db.collection('users').updateOne({ username }, { $set: { password: newPassword } });
     res.json({ message: 'Password updated successfully' });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -600,15 +538,11 @@ app.put('/api/user/password', async (req, res) => {
 app.delete('/api/user', async (req, res) => {
   try {
     const { username, securityCode } = req.body;
-    
     if (!securityCode || securityCode !== VALID_SECURITY_CODE) {
       return res.status(400).json({ error: 'Invalid security code' });
     }
     
-    // Only delete user account and their personal data
     await db.collection('users').deleteOne({ username });
-    
-    // Delete user's personal data only (not inventory data)
     await db.collection('statements').deleteMany({});
     await db.collection('reference_reports').deleteMany({});
     await db.collection('purchases').deleteMany({});
@@ -621,161 +555,84 @@ app.delete('/api/user', async (req, res) => {
   }
 });
 
-// PDF Generation APIs with Professional Layout (Single Page)
+// ==========================================
+// REFACTORED PDF GENERATION (NEW SCHEMA)
+// ==========================================
+
 app.post('/generate-reference-report-pdf', (req, res) => {
   try {
     const { referenceData } = req.body;
-    
     if (!referenceData || !referenceData.items || !Array.isArray(referenceData.items)) {
       return res.status(400).json({ error: 'Invalid reference data' });
     }
     
-    const doc = new PDFDocument({ 
-      margin: 50,
-      size: 'A4'
-    });
-    
+    const doc = new PDFDocument({ margin: 50, size: 'A4' });
     const filename = `reference-report-${referenceData.reportNumber || Date.now()}.pdf`;
     
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Type', 'application/pdf');
-    
     doc.pipe(res);
     
-    // Header with company info
-    doc.fillColor('#3b82f6')
-       .fontSize(24)
-       .text('REFERENCE REPORT', { align: 'center' });
-    
+    // Header
+    doc.fillColor('#3b82f6').fontSize(24).text('REFERENCE REPORT', { align: 'center' });
     doc.moveDown(0.5);
-    
-    // Company Information
-    doc.fillColor('#1e293b')
-       .fontSize(10)
-       .text('Inventory Management System', { align: 'center' })
-       .text('Professional Inventory Solutions', { align: 'center' })
-       .text('Email: support@inventory-system.com', { align: 'center' });
-    
+    doc.fillColor('#1e293b').fontSize(10).text('Inventory Management System', { align: 'center' })
+       .text('Professional Inventory Solutions', { align: 'center' });
+    doc.moveDown(1);
+    doc.moveTo(50, doc.y).lineTo(550, doc.y).strokeColor('#e2e8f0').lineWidth(1).stroke();
     doc.moveDown(1);
     
-    // Draw separator line
-    doc.moveTo(50, doc.y)
-       .lineTo(550, doc.y)
-       .strokeColor('#e2e8f0')
-       .lineWidth(1)
-       .stroke();
-    
-    doc.moveDown(1);
-    
-    // Reference details in two columns
-    const leftColumn = 50;
-    const rightColumn = 300;
-    
-    doc.fillColor('#1e293b')
-       .fontSize(12)
-       .text('Reference Number:', leftColumn, doc.y, { continued: true })
-       .fillColor('#3b82f6')
-       .font('Helvetica-Bold')
-       .text(` ${referenceData.reportNumber || 'REF-N/A'}`)
-       
-       .fillColor('#1e293b')
-       .font('Helvetica')
-       .text('Report Date:', leftColumn, doc.y + 20, { continued: true })
-       .fillColor('#64748b')
-       .text(` ${referenceData.date || new Date().toLocaleDateString()}`)
-       
-       .fillColor('#1e293b')
-       .text('Generated By:', rightColumn, doc.y - 40, { continued: true })
-       .fillColor('#64748b')
-       .text(' Inventory System');
+    // Info
+    doc.fillColor('#1e293b').fontSize(12).text('Reference Number:', 50, doc.y, { continued: true })
+       .fillColor('#3b82f6').font('Helvetica-Bold').text(` ${referenceData.reportNumber || 'REF-N/A'}`)
+       .fillColor('#1e293b').font('Helvetica').text('Report Date:', 50, doc.y + 20, { continued: true })
+       .fillColor('#64748b').text(` ${referenceData.date || new Date().toLocaleDateString()}`);
     
     doc.moveDown(2);
     
-    // Table header
+    // Table Header
     const tableTop = doc.y;
-    doc.fillColor('#ffffff')
-       .rect(50, tableTop, 500, 25)
-       .fill('#3b82f6');
-    
-    doc.fillColor('#ffffff')
-       .fontSize(10)
-       .font('Helvetica-Bold')
+    doc.fillColor('#ffffff').rect(50, tableTop, 500, 25).fill('#3b82f6');
+    doc.fillColor('#ffffff').fontSize(10).font('Helvetica-Bold')
        .text('Item Description', 55, tableTop + 8)
-       .text('SKU', 200, tableTop + 8)
+       .text('Ref Code', 200, tableTop + 8) // Changed from SKU
        .text('Qty', 350, tableTop + 8)
        .text('Unit Price', 400, tableTop + 8)
        .text('Total', 470, tableTop + 8);
     
     let yPosition = tableTop + 35;
-    let itemsPerPage = 15; // Limit items to fit on one page
+    let itemsPerPage = 15;
     const displayItems = referenceData.items.slice(0, itemsPerPage);
     
-    // Reference items
     displayItems.forEach((item, index) => {
-      const quantity = item.invoiceQty || item.quantity || 1;
-      const unitPrice = item.unitPrice || 0;
+      const quantity = item.invoiceQty || item.qty_on_hand || item.quantity || 1;
+      const unitPrice = item.sell_price || item.unitPrice || 0;
       const itemTotal = quantity * unitPrice;
       const isEven = index % 2 === 0;
       
-      // Alternate row colors
       if (isEven) {
-        doc.fillColor('#f8fafc')
-           .rect(50, yPosition - 5, 500, 30)
-           .fill();
+        doc.fillColor('#f8fafc').rect(50, yPosition - 5, 500, 30).fill();
       }
       
-      doc.fillColor('#1e293b')
-         .font('Helvetica')
-         .fontSize(9)
+      doc.fillColor('#1e293b').font('Helvetica').fontSize(9)
          .text(item.name || 'Unnamed Item', 55, yPosition)
-         .text(item.sku || 'N/A', 200, yPosition)
+         .text(item.ref_code || item.sku || 'N/A', 200, yPosition) // Use ref_code
          .text(quantity.toString(), 350, yPosition)
          .text(`RM ${unitPrice.toFixed(2)}`, 400, yPosition)
          .text(`RM ${itemTotal.toFixed(2)}`, 470, yPosition);
       
-      // Item details
-      doc.fillColor('#64748b')
-         .fontSize(7)
-         .text(`Category: ${item.category || 'N/A'}`, 55, yPosition + 12);
-      
       yPosition += 30;
     });
     
-    // If too many items, add note
-    if (referenceData.items.length > itemsPerPage) {
-      doc.fillColor('#ef4444')
-         .fontSize(9)
-         .text(`* Showing first ${itemsPerPage} items only for single-page PDF`, 50, yPosition + 10);
-      yPosition += 20;
-    }
-    
-    // Total section
+    // Total
     const totalY = Math.min(yPosition + 20, 650);
-    doc.moveTo(350, totalY)
-       .lineTo(550, totalY)
-       .strokeColor('#e2e8f0')
-       .lineWidth(1)
-       .stroke();
-    
-    doc.fillColor('#1e293b')
-       .fontSize(12)
-       .font('Helvetica-Bold')
+    doc.moveTo(350, totalY).lineTo(550, totalY).strokeColor('#e2e8f0').lineWidth(1).stroke();
+    doc.fillColor('#1e293b').fontSize(12).font('Helvetica-Bold')
        .text('Grand Total:', 350, totalY + 10, { continued: true })
-       .fillColor('#3b82f6')
-       .text(` RM ${(referenceData.total || 0).toFixed(2)}`, { align: 'right' });
-    
-    // Footer
-    const footerY = Math.min(totalY + 50, 700);
-    doc.y = footerY;
-    doc.fillColor('#64748b')
-       .fontSize(8)
-       .text('This is a computer-generated reference report for internal use.', { align: 'center' })
-       .text(`Generated on: ${new Date().toLocaleString()} | Inventory Management System v2.0`, { align: 'center' });
+       .fillColor('#3b82f6').text(` RM ${(referenceData.total || 0).toFixed(2)}`, { align: 'right' });
     
     doc.end();
-    
   } catch (error) {
-    console.error('Reference PDF generation error:', error);
     res.status(500).json({ error: 'Failed to generate PDF' });
   }
 });
@@ -783,399 +640,145 @@ app.post('/generate-reference-report-pdf', (req, res) => {
 app.post('/generate-purchase-pdf', (req, res) => {
   try {
     const { purchaseData } = req.body;
+    if (!purchaseData || !purchaseData.items) return res.status(400).json({ error: 'Invalid data' });
     
-    if (!purchaseData || !purchaseData.items || !Array.isArray(purchaseData.items)) {
-      return res.status(400).json({ error: 'Invalid purchase data' });
-    }
-    
-    const doc = new PDFDocument({ 
-      margin: 50,
-      size: 'A4'
-    });
-    
+    const doc = new PDFDocument({ margin: 50, size: 'A4' });
     const filename = `purchase-order-${purchaseData.purchaseNumber || Date.now()}.pdf`;
-    
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Type', 'application/pdf');
-    
     doc.pipe(res);
     
-    // Header
-    doc.fillColor('#10b981')
-       .fontSize(24)
-       .text('PURCHASE ORDER', { align: 'center' });
-    
-    doc.moveDown(0.5);
-    
-    // Company Information
-    doc.fillColor('#1e293b')
-       .fontSize(10)
-       .text('Inventory Management System', { align: 'center' })
-       .text('Stock Procurement Department', { align: 'center' });
-    
+    doc.fillColor('#10b981').fontSize(24).text('PURCHASE ORDER', { align: 'center' });
     doc.moveDown(1);
     
-    // Draw separator line
-    doc.moveTo(50, doc.y)
-       .lineTo(550, doc.y)
-       .strokeColor('#e2e8f0')
-       .lineWidth(1)
-       .stroke();
-    
-    doc.moveDown(1);
-    
-    // Purchase details
-    const leftColumn = 50;
-    const rightColumn = 300;
-    
-    doc.fillColor('#1e293b')
-       .fontSize(11)
-       .text('Purchase Number:', leftColumn, doc.y, { continued: true })
-       .fillColor('#10b981')
-       .font('Helvetica-Bold')
-       .text(` ${purchaseData.purchaseNumber || 'PUR-N/A'}`)
-       
-       .fillColor('#1e293b')
-       .font('Helvetica')
-       .text('Order Date:', leftColumn, doc.y + 20, { continued: true })
-       .fillColor('#64748b')
-       .text(` ${purchaseData.date || new Date().toLocaleDateString()}`)
-       
-       .fillColor('#1e293b')
-       .text('Supplier:', rightColumn, doc.y - 40, { continued: true })
-       .fillColor('#64748b')
-       .text(` ${purchaseData.supplier || 'N/A'}`);
+    // Info
+    doc.fillColor('#1e293b').fontSize(12).text('Purchase Number:', 50, doc.y, { continued: true })
+       .fillColor('#10b981').font('Helvetica-Bold').text(` ${purchaseData.purchaseNumber}`)
+       .fillColor('#1e293b').font('Helvetica').text('Supplier:', 50, doc.y + 20, { continued: true })
+       .fillColor('#64748b').text(` ${purchaseData.supplier}`);
     
     doc.moveDown(2);
     
-    // Table header
+    // Table
     const tableTop = doc.y;
-    doc.fillColor('#ffffff')
-       .rect(50, tableTop, 500, 25)
-       .fill('#10b981');
-    
-    doc.fillColor('#ffffff')
-       .fontSize(10)
-       .font('Helvetica-Bold')
+    doc.fillColor('#ffffff').rect(50, tableTop, 500, 25).fill('#10b981');
+    doc.fillColor('#ffffff').fontSize(10).font('Helvetica-Bold')
        .text('Item', 55, tableTop + 8)
-       .text('SKU', 200, tableTop + 8)
+       .text('Ref Code', 200, tableTop + 8)
        .text('Qty', 300, tableTop + 8)
-       .text('Unit Cost', 350, tableTop + 8)
+       .text('Cost', 350, tableTop + 8)
        .text('Total', 450, tableTop + 8);
-    
+       
     let yPosition = tableTop + 35;
     let totalCost = 0;
-    let itemsPerPage = 15;
-    const displayItems = purchaseData.items.slice(0, itemsPerPage);
+    const displayItems = purchaseData.items.slice(0, 15);
     
-    // Purchase items
     displayItems.forEach((item, index) => {
       const quantity = item.quantity || 1;
-      const unitCost = item.unitCost || 0;
-      const itemTotal = quantity * unitCost;
+      const cost = item.buy_price || item.unitCost || 0;
+      const itemTotal = quantity * cost;
       totalCost += itemTotal;
-      const isEven = index % 2 === 0;
       
-      // Alternate row colors
-      if (isEven) {
-        doc.fillColor('#f8fafc')
-           .rect(50, yPosition - 5, 500, 25)
-           .fill();
-      }
+      if (index % 2 === 0) doc.fillColor('#f8fafc').rect(50, yPosition - 5, 500, 25).fill();
       
-      doc.fillColor('#1e293b')
-         .font('Helvetica')
-         .fontSize(9)
-         .text(item.name || 'Unnamed Item', 55, yPosition)
-         .text(item.sku || 'N/A', 200, yPosition)
+      doc.fillColor('#1e293b').font('Helvetica').fontSize(9)
+         .text(item.name, 55, yPosition)
+         .text(item.ref_code || item.sku || 'N/A', 200, yPosition)
          .text(quantity.toString(), 300, yPosition)
-         .text(`RM ${unitCost.toFixed(2)}`, 350, yPosition)
+         .text(`RM ${cost.toFixed(2)}`, 350, yPosition)
          .text(`RM ${itemTotal.toFixed(2)}`, 450, yPosition);
-      
+         
       yPosition += 25;
     });
     
-    // If too many items, add note
-    if (purchaseData.items.length > itemsPerPage) {
-      doc.fillColor('#ef4444')
-         .fontSize(9)
-         .text(`* Showing first ${itemsPerPage} items only for single-page PDF`, 50, yPosition + 10);
-      yPosition += 20;
-    }
-    
-    // Total section
-    const totalY = Math.min(yPosition + 20, 650);
-    doc.moveTo(350, totalY)
-       .lineTo(550, totalY)
-       .strokeColor('#e2e8f0')
-       .lineWidth(1)
-       .stroke();
-    
-    doc.fillColor('#1e293b')
-       .fontSize(12)
-       .font('Helvetica-Bold')
-       .text('Total Cost:', 350, totalY + 10, { continued: true })
-       .fillColor('#10b981')
-       .text(` RM ${totalCost.toFixed(2)}`, { align: 'right' });
-    
-    // Footer
-    const footerY = Math.min(totalY + 50, 700);
-    doc.y = footerY;
-    doc.fillColor('#64748b')
-       .fontSize(8)
-       .text('Purchase Order - Inventory Management System', { align: 'center' })
-       .text(`Generated on: ${new Date().toLocaleString()}`, { align: 'center' });
-    
+    doc.text(`Total Cost: RM ${totalCost.toFixed(2)}`, 350, yPosition + 20, { align: 'right' });
     doc.end();
-    
   } catch (error) {
-    console.error('Purchase PDF generation error:', error);
-    res.status(500).json({ error: 'Failed to generate purchase PDF' });
+    res.status(500).json({ error: 'Failed to generate PDF' });
   }
 });
 
 app.post('/generate-sales-pdf', (req, res) => {
   try {
     const { salesData } = req.body;
+    if (!salesData || !salesData.items) return res.status(400).json({ error: 'Invalid data' });
     
-    if (!salesData || !salesData.items || !Array.isArray(salesData.items)) {
-      return res.status(400).json({ error: 'Invalid sales data' });
-    }
-    
-    const doc = new PDFDocument({ 
-      margin: 50,
-      size: 'A4'
-    });
-    
+    const doc = new PDFDocument({ margin: 50, size: 'A4' });
     const filename = `sales-invoice-${salesData.salesNumber || Date.now()}.pdf`;
-    
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Type', 'application/pdf');
-    
     doc.pipe(res);
     
-    // Header
-    doc.fillColor('#ef4444')
-       .fontSize(24)
-       .text('SALES INVOICE', { align: 'center' });
-    
-    doc.moveDown(0.5);
-    
-    // Company Information
-    doc.fillColor('#1e293b')
-       .fontSize(10)
-       .text('Inventory Management System', { align: 'center' })
-       .text('Sales Department', { align: 'center' });
-    
+    doc.fillColor('#ef4444').fontSize(24).text('SALES INVOICE', { align: 'center' });
     doc.moveDown(1);
     
-    // Draw separator line
-    doc.moveTo(50, doc.y)
-       .lineTo(550, doc.y)
-       .strokeColor('#e2e8f0')
-       .lineWidth(1)
-       .stroke();
-    
-    doc.moveDown(1);
-    
-    // Sales details
-    const leftColumn = 50;
-    const rightColumn = 300;
-    
-    doc.fillColor('#1e293b')
-       .fontSize(11)
-       .text('Sales Number:', leftColumn, doc.y, { continued: true })
-       .fillColor('#ef4444')
-       .font('Helvetica-Bold')
-       .text(` ${salesData.salesNumber || 'SAL-N/A'}`)
-       
-       .fillColor('#1e293b')
-       .font('Helvetica')
-       .text('Sale Date:', leftColumn, doc.y + 20, { continued: true })
-       .fillColor('#64748b')
-       .text(` ${salesData.date || new Date().toLocaleDateString()}`)
-       
-       .fillColor('#1e293b')
-       .text('Customer:', rightColumn, doc.y - 40, { continued: true })
-       .fillColor('#64748b')
-       .text(` ${salesData.customer || 'N/A'}`);
+    // Info
+    doc.fillColor('#1e293b').fontSize(12).text('Sales Number:', 50, doc.y, { continued: true })
+       .fillColor('#ef4444').font('Helvetica-Bold').text(` ${salesData.salesNumber}`)
+       .fillColor('#1e293b').font('Helvetica').text('Customer:', 50, doc.y + 20, { continued: true })
+       .fillColor('#64748b').text(` ${salesData.customer}`);
     
     doc.moveDown(2);
     
-    // Table header
+    // Table
     const tableTop = doc.y;
-    doc.fillColor('#ffffff')
-       .rect(50, tableTop, 500, 25)
-       .fill('#ef4444');
-    
-    doc.fillColor('#ffffff')
-       .fontSize(10)
-       .font('Helvetica-Bold')
+    doc.fillColor('#ffffff').rect(50, tableTop, 500, 25).fill('#ef4444');
+    doc.fillColor('#ffffff').fontSize(10).font('Helvetica-Bold')
        .text('Item', 55, tableTop + 8)
-       .text('SKU', 200, tableTop + 8)
+       .text('Ref Code', 200, tableTop + 8)
        .text('Qty', 300, tableTop + 8)
-       .text('Unit Price', 350, tableTop + 8)
+       .text('Price', 350, tableTop + 8)
        .text('Total', 450, tableTop + 8);
-    
+       
     let yPosition = tableTop + 35;
     let itemsPerPage = 15;
     const displayItems = salesData.items.slice(0, itemsPerPage);
     
-    // Sales items
     displayItems.forEach((item, index) => {
       const quantity = item.quantity || 1;
-      const unitPrice = item.unitPrice || 0;
-      const itemTotal = quantity * unitPrice;
-      const isEven = index % 2 === 0;
+      const price = item.sell_price || item.unitPrice || 0;
+      const itemTotal = quantity * price;
       
-      // Alternate row colors
-      if (isEven) {
-        doc.fillColor('#f8fafc')
-           .rect(50, yPosition - 5, 500, 25)
-           .fill();
-      }
+      if (index % 2 === 0) doc.fillColor('#f8fafc').rect(50, yPosition - 5, 500, 25).fill();
       
-      doc.fillColor('#1e293b')
-         .font('Helvetica')
-         .fontSize(9)
-         .text(item.name || 'Unnamed Item', 55, yPosition)
-         .text(item.sku || 'N/A', 200, yPosition)
+      doc.fillColor('#1e293b').font('Helvetica').fontSize(9)
+         .text(item.name, 55, yPosition)
+         .text(item.ref_code || item.sku || 'N/A', 200, yPosition)
          .text(quantity.toString(), 300, yPosition)
-         .text(`RM ${unitPrice.toFixed(2)}`, 350, yPosition)
+         .text(`RM ${price.toFixed(2)}`, 350, yPosition)
          .text(`RM ${itemTotal.toFixed(2)}`, 450, yPosition);
-      
+         
       yPosition += 25;
     });
     
-    // If too many items, add note
-    if (salesData.items.length > itemsPerPage) {
-      doc.fillColor('#ef4444')
-         .fontSize(9)
-         .text(`* Showing first ${itemsPerPage} items only for single-page PDF`, 50, yPosition + 10);
-      yPosition += 20;
-    }
-    
-    // Total section
-    const totalY = Math.min(yPosition + 20, 650);
-    doc.moveTo(350, totalY)
-       .lineTo(550, totalY)
-       .strokeColor('#e2e8f0')
-       .lineWidth(1)
-       .stroke();
-    
-    doc.fillColor('#1e293b')
-       .fontSize(12)
-       .font('Helvetica-Bold')
-       .text('Grand Total:', 350, totalY + 10, { continued: true })
-       .fillColor('#ef4444')
-       .text(` RM ${(salesData.total || 0).toFixed(2)}`, { align: 'right' });
-    
-    // Footer
-    const footerY = Math.min(totalY + 50, 700);
-    doc.y = footerY;
-    doc.fillColor('#64748b')
-       .fontSize(8)
-       .text('Thank you for your purchase!', { align: 'center' })
-       .text('Sales Invoice - Inventory Management System', { align: 'center' })
-       .text(`Generated on: ${new Date().toLocaleString()}`, { align: 'center' });
-    
+    doc.text(`Grand Total: RM ${(salesData.total || 0).toFixed(2)}`, 350, yPosition + 20, { align: 'right' });
     doc.end();
-    
   } catch (error) {
-    console.error('Sales PDF generation error:', error);
-    res.status(500).json({ error: 'Failed to generate sales PDF' });
+    res.status(500).json({ error: 'Failed to generate PDF' });
   }
 });
 
 app.post('/generate-inventory-report-pdf', (req, res) => {
   try {
     const { reportData } = req.body;
+    if (!reportData || !reportData.items) return res.status(400).json({ error: 'Invalid data' });
     
-    if (!reportData || !reportData.items || !Array.isArray(reportData.items)) {
-      return res.status(400).json({ error: 'Invalid report data' });
-    }
-    
-    const doc = new PDFDocument({ 
-      margin: 50,
-      size: 'A4'
-    });
-    
+    const doc = new PDFDocument({ margin: 50, size: 'A4' });
     const filename = `inventory-report-${reportData.id || Date.now()}.pdf`;
-    
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Type', 'application/pdf');
-    
     doc.pipe(res);
     
-    // Header
-    doc.fillColor('#06b6d4')
-       .fontSize(24)
-       .text('INVENTORY REPORT', { align: 'center' });
-    
-    doc.moveDown(0.5);
-    
-    // Company Information
-    doc.fillColor('#1e293b')
-       .fontSize(10)
-       .text('Inventory Management System', { align: 'center' })
-       .text('Comprehensive Stock Analysis', { align: 'center' });
-    
+    doc.fillColor('#06b6d4').fontSize(24).text('INVENTORY REPORT', { align: 'center' });
     doc.moveDown(1);
     
-    // Draw separator line
-    doc.moveTo(50, doc.y)
-       .lineTo(550, doc.y)
-       .strokeColor('#e2e8f0')
-       .lineWidth(1)
-       .stroke();
-    
-    doc.moveDown(1);
-    
-    // Report details
-    const leftColumn = 50;
-    const rightColumn = 300;
-    
-    doc.fillColor('#1e293b')
-       .fontSize(11)
-       .text('Report ID:', leftColumn, doc.y, { continued: true })
-       .fillColor('#64748b')
-       .text(` ${reportData.id || 'N/A'}`)
-       
-       .fillColor('#1e293b')
-       .text('Generated:', leftColumn, doc.y + 20, { continued: true })
-       .fillColor('#64748b')
-       .text(` ${reportData.date || new Date().toLocaleDateString()}`)
-       
-       .fillColor('#1e293b')
-       .text('Date Range:', leftColumn, doc.y + 40, { continued: true })
-       .fillColor('#64748b')
-       .text(` ${reportData.dateRange || 'All Items'}`)
-       
-       .fillColor('#1e293b')
-       .text('Total Items:', rightColumn, doc.y - 60, { continued: true })
-       .fillColor('#64748b')
-       .text(` ${reportData.items.length}`)
-       
-       .fillColor('#1e293b')
-       .text('Report Type:', rightColumn, doc.y + 20, { continued: true })
-       .fillColor('#64748b')
-       .text(' Comprehensive Inventory');
-    
-    doc.moveDown(2);
-    
-    // Table header
+    // Table
     const tableTop = doc.y;
-    doc.fillColor('#ffffff')
-       .rect(50, tableTop, 500, 25)
-       .fill('#06b6d4');
-    
-    doc.fillColor('#ffffff')
-       .fontSize(9)
-       .font('Helvetica-Bold')
+    doc.fillColor('#ffffff').rect(50, tableTop, 500, 25).fill('#06b6d4');
+    doc.fillColor('#ffffff').fontSize(9).font('Helvetica-Bold')
        .text('#', 55, tableTop + 8)
-       .text('SKU', 70, tableTop + 8)
-       .text('Product Name', 120, tableTop + 8)
-       .text('Category', 220, tableTop + 8)
+       .text('Ref Code', 70, tableTop + 8)
+       .text('Name', 130, tableTop + 8)
        .text('Stock', 300, tableTop + 8)
        .text('Cost', 340, tableTop + 8)
        .text('Price', 390, tableTop + 8)
@@ -1183,111 +786,34 @@ app.post('/generate-inventory-report-pdf', (req, res) => {
     
     let yPosition = tableTop + 35;
     let totalInventoryValue = 0;
-    let totalPotentialValue = 0;
-    let totalItems = 0;
-    let itemsPerPage = 20;
-    const displayItems = reportData.items.slice(0, itemsPerPage);
+    const displayItems = reportData.items.slice(0, 20);
     
-    // Inventory items
     displayItems.forEach((item, index) => {
-      const quantity = item.quantity || 0;
-      const unitCost = item.unitCost || 0;
-      const unitPrice = item.unitPrice || 0;
-      const inventoryValue = quantity * unitCost;
-      const potentialValue = quantity * unitPrice;
-      totalInventoryValue += inventoryValue;
-      totalPotentialValue += potentialValue;
-      totalItems += quantity;
+      // Use NEW SCHEMA fields for report
+      const quantity = item.qty_on_hand || item.quantity || 0;
+      const cost = item.buy_price || item.unitCost || 0;
+      const price = item.sell_price || item.unitPrice || 0;
+      const val = quantity * cost;
+      totalInventoryValue += val;
       
-      const isEven = index % 2 === 0;
+      if (index % 2 === 0) doc.fillColor('#f8fafc').rect(50, yPosition - 5, 500, 20).fill();
       
-      // Alternate row colors
-      if (isEven) {
-        doc.fillColor('#f8fafc')
-           .rect(50, yPosition - 5, 500, 20)
-           .fill();
-      }
-      
-      doc.fillColor('#1e293b')
-         .font('Helvetica')
-         .fontSize(8)
+      doc.fillColor('#1e293b').font('Helvetica').fontSize(8)
          .text((index + 1).toString(), 55, yPosition)
-         .text(item.sku || 'N/A', 70, yPosition)
-         .text((item.name || 'Unnamed Item').length > 25 ? (item.name || 'Unnamed Item').substring(0, 22) + '...' : (item.name || 'Unnamed Item'), 120, yPosition)
-         .text((item.category || 'N/A').length > 15 ? (item.category || 'N/A').substring(0, 12) + '...' : (item.category || 'N/A'), 220, yPosition)
+         .text(item.ref_code || item.sku || 'N/A', 70, yPosition)
+         .text(item.name.substring(0, 20), 130, yPosition)
          .text(quantity.toString(), 300, yPosition)
-         .text(`RM ${unitCost.toFixed(2)}`, 340, yPosition)
-         .text(`RM ${unitPrice.toFixed(2)}`, 390, yPosition)
-         .text(`RM ${inventoryValue.toFixed(2)}`, 450, yPosition);
-      
+         .text(`RM ${cost.toFixed(2)}`, 340, yPosition)
+         .text(`RM ${price.toFixed(2)}`, 390, yPosition)
+         .text(`RM ${val.toFixed(2)}`, 450, yPosition);
+         
       yPosition += 20;
     });
     
-    // If too many items, add note
-    if (reportData.items.length > itemsPerPage) {
-      doc.fillColor('#ef4444')
-         .fontSize(9)
-         .text(`* Showing first ${itemsPerPage} items only for single-page PDF`, 50, yPosition + 10);
-      yPosition += 20;
-    }
-    
-    // Summary section
-    const summaryY = Math.min(yPosition + 30, 650);
-    
-    // Summary box
-    doc.fillColor('#f8fafc')
-       .rect(50, summaryY, 500, 100)
-       .fill();
-    
-    doc.strokeColor('#e2e8f0')
-       .rect(50, summaryY, 500, 100)
-       .stroke();
-    
-    doc.fillColor('#1e293b')
-       .fontSize(12)
-       .font('Helvetica-Bold')
-       .text('INVENTORY SUMMARY', 55, summaryY + 15);
-    
-    doc.fillColor('#64748b')
-       .fontSize(9)
-       .font('Helvetica')
-       .text('Total Items in Report:', 55, summaryY + 35, { continued: true })
-       .fillColor('#1e293b')
-       .text(` ${reportData.items.length} products`)
-       
-       .fillColor('#64748b')
-       .text('Total Stock Quantity:', 55, summaryY + 50, { continued: true })
-       .fillColor('#1e293b')
-       .text(` ${totalItems} units`)
-       
-       .fillColor('#64748b')
-       .text('Total Inventory Value:', 280, summaryY + 35, { continued: true })
-       .fillColor('#ef4444')
-       .text(` RM ${totalInventoryValue.toFixed(2)}`)
-       
-       .fillColor('#64748b')
-       .text('Total Potential Value:', 280, summaryY + 50, { continued: true })
-       .fillColor('#10b981')
-       .text(` RM ${totalPotentialValue.toFixed(2)}`)
-       
-       .fillColor('#64748b')
-       .text('Profit Potential:', 280, summaryY + 65, { continued: true })
-       .fillColor('#3b82f6')
-       .text(` RM ${(totalPotentialValue - totalInventoryValue).toFixed(2)}`);
-    
-    // Footer
-    doc.y = summaryY + 120;
-    doc.fillColor('#64748b')
-       .fontSize(8)
-       .text('Confidential Inventory Report - For Internal Use Only', { align: 'center' })
-       .text('Inventory Management System | Professional Stock Analysis', { align: 'center' })
-       .text(`Generated on: ${new Date().toLocaleString()} | Page 1 of 1`, { align: 'center' });
-    
+    doc.text(`Total Inventory Value: RM ${totalInventoryValue.toFixed(2)}`, 350, yPosition + 20);
     doc.end();
-    
   } catch (error) {
-    console.error('Inventory PDF generation error:', error);
-    res.status(500).json({ error: 'Failed to generate inventory PDF' });
+    res.status(500).json({ error: 'Failed to generate PDF' });
   }
 });
 
@@ -1298,7 +824,7 @@ function getLoginPage() {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Login | Inventory System</title>
+  <title>Login | Secure Inventory</title>
   <style>${getCSS()}</style>
 </head>
 <body>
@@ -1306,20 +832,19 @@ function getLoginPage() {
     <div class="auth-overlay"></div>
     <div class="auth-content">
       <div class="auth-header">
-        <div class="logo">📦</div>
-        <h1 class="main-title">INVENTORY WITH INVOICE SYSTEM</h1>
-        <p class="subtitle">Complete Inventory Management Solution</p>
+        <div class="logo">🔐</div>
+        <h1 class="main-title">SECURE INVENTORY SYSTEM</h1>
+        <p class="subtitle">Security & Tracking Focused</p>
       </div>
-      
       <div class="auth-card">
         <form id="loginForm">
           <div class="input-group">
             <label>Username</label>
-            <input type="text" id="username" required placeholder="Enter your username">
+            <input type="text" id="username" required>
           </div>
           <div class="input-group">
             <label>Password</label>
-            <input type="password" id="password" required placeholder="Enter your password">
+            <input type="password" id="password" required>
           </div>
           <button type="submit" class="btn full primary">Login</button>
           <div class="auth-links">
@@ -1329,23 +854,19 @@ function getLoginPage() {
       </div>
     </div>
   </div>
-
   <script>${getJavaScript()}</script>
   <script>
     document.getElementById('loginForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const username = document.getElementById('username').value;
       const password = document.getElementById('password').value;
-
       try {
         const response = await fetch('/api/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ username, password })
         });
-
         const data = await response.json();
-        
         if (data.success) {
           localStorage.setItem('currentUser', JSON.stringify(data.user));
           window.location.href = '/?page=dashboard';
@@ -1356,11 +877,6 @@ function getLoginPage() {
         alert('Login error: ' + error.message);
       }
     });
-
-    const currentUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
-    if (currentUser && currentUser.username) {
-      window.location.href = '/?page=dashboard';
-    }
   </script>
 </body>
 </html>`;
@@ -1371,8 +887,7 @@ function getRegisterPage() {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Register | Inventory System</title>
+  <title>Register | Secure Inventory</title>
   <style>${getCSS()}</style>
 </head>
 <body>
@@ -1380,25 +895,23 @@ function getRegisterPage() {
     <div class="auth-overlay"></div>
     <div class="auth-content">
       <div class="auth-header">
-        <div class="logo">📦</div>
-        <h1 class="main-title">INVENTORY WITH INVOICE SYSTEM</h1>
-        <p class="subtitle">Create Your Account</p>
+        <div class="logo">🔐</div>
+        <h1 class="main-title">CREATE ACCOUNT</h1>
       </div>
-      
       <div class="auth-card">
         <form id="registerForm">
           <div class="input-group">
             <label>Username</label>
-            <input type="text" id="user" required placeholder="Choose a username">
+            <input type="text" id="user" required>
           </div>
           <div class="input-group">
             <label>Password</label>
-            <input type="password" id="pass" required placeholder="Create a password">
+            <input type="password" id="pass" required>
           </div>
           <div class="input-group">
             <label>Security Code</label>
-            <input type="password" id="securityCode" required placeholder="Enter security code">
-            <small class="hint">Contact administrator for security code</small>
+            <input type="password" id="securityCode" required>
+            <small class="hint">Contact admin for code</small>
           </div>
           <button type="submit" class="btn full primary">Create Account</button>
           <div class="auth-links">
@@ -1408,7 +921,6 @@ function getRegisterPage() {
       </div>
     </div>
   </div>
-
   <script>${getJavaScript()}</script>
   <script>
     document.getElementById('registerForm').addEventListener('submit', async (e) => {
@@ -1416,16 +928,13 @@ function getRegisterPage() {
       const username = document.getElementById('user').value;
       const password = document.getElementById('pass').value;
       const securityCode = document.getElementById('securityCode').value;
-
       try {
         const response = await fetch('/api/register', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ username, password, securityCode })
         });
-
         const data = await response.json();
-        
         if (response.ok) {
           alert('Registration successful!');
           window.location.href = '/';
@@ -1446,98 +955,65 @@ function getDashboardPage() {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Dashboard | Inventory System</title>
+  <title>Dashboard | Secure Inventory</title>
   <style>${getCSS()}</style>
 </head>
 <body>
   <div class="container">
     <div class="topbar">
-      <h2>📦 Inventory Dashboard</h2>
+      <h2>🔐 Security Dashboard</h2>
       <div class="topbar-actions">
-        <span class="welcome-text">Welcome, <strong id="username"></strong></span>
+        <span class="welcome-text">User: <strong id="username"></strong></span>
         <button class="btn small ghost" onclick="toggleTheme()">🌓</button>
         <a href="/?page=settings" class="btn small">⚙️ Settings</a>
         <button class="btn small danger" onclick="logout()">Logout</button>
       </div>
     </div>
 
-    <!-- Login History Section -->
     <div class="card">
       <div class="card-header">
-        <h3>📊 System Login History</h3>
+        <h3>📊 Audit Log (Security)</h3>
         <button class="btn small" onclick="refreshLoginHistory()">🔄 Refresh</button>
       </div>
       <div id="loginHistory" class="login-history-container">
-        <div class="loading">Loading login history...</div>
-      </div>
-    </div>
-
-    <!-- Total Values Summary -->
-    <div class="card">
-      <h3>💰 Inventory Value Summary</h3>
-      <div class="value-summary">
-        <div class="value-item primary">
-          <h4>Total Inventory Value</h4>
-          <p id="totalInventoryValueSummary">RM 0.00</p>
-        </div>
-        <div class="value-item success">
-          <h4>Total Potential Value</h4>
-          <p id="totalPotentialValueSummary">RM 0.00</p>
-        </div>
-        <div class="value-item info">
-          <h4>Total Items</h4>
-          <p id="totalItemsCount">0</p>
-        </div>
+        <div class="loading">Loading security logs...</div>
       </div>
     </div>
 
     <div class="card">
-      <h3>Add New Item</h3>
+      <h3>Add New Stock Item</h3>
       <form id="itemForm">
         <div class="form-row">
-          <label>SKU <input type="text" id="itemSKU" required placeholder="Product SKU"></label>
-          <label>Name <input type="text" id="itemName" required placeholder="Product name"></label>
-          <label>Category <input type="text" id="itemCategory" required placeholder="Product category"></label>
+          <label>Ref Code (SKU) <input type="text" id="itemSKU" required placeholder="REF-001"></label>
+          <label>Name <input type="text" id="itemName" required placeholder="Item Name"></label>
+          <label>Category <input type="text" id="itemCategory" required placeholder="Group"></label>
         </div>
         <div class="form-row">
-          <label>Quantity <input type="number" id="itemQty" min="1" required placeholder="0"></label>
-          <label>Unit Cost (RM) <input type="number" id="itemUnitCost" step="0.01" min="0.01" required placeholder="0.00"></label>
-          <label>Unit Price (RM) <input type="number" id="itemUnitPrice" step="0.01" min="0.01" required placeholder="0.00"></label>
+          <label>Qty On Hand <input type="number" id="itemQty" min="1" required placeholder="0"></label>
+          <label>Buy Price (RM) <input type="number" id="itemUnitCost" step="0.01" min="0.01" required placeholder="0.00"></label>
+          <label>Sell Price (RM) <input type="number" id="itemUnitPrice" step="0.01" min="0.01" required placeholder="0.00"></label>
         </div>
-        <button type="submit" class="btn full primary">➕ Add Item</button>
+        <button type="submit" class="btn full primary">➕ Add Stock</button>
       </form>
     </div>
 
     <div class="card">
       <div class="card-header">
-        <h3>Inventory List</h3>
+        <h3>Stock Database</h3>
         <div class="action-buttons">
-          <button class="btn" onclick="downloadInventoryReport()">📊 Download Report</button>
-          <a href="/?page=purchase" class="btn primary">📥 Purchase</a>
-          <a href="/?page=sales" class="btn success">📤 Sales</a>
-          <a href="/?page=reference" class="btn info">📋 Reference Report</a>
-          <a href="/?page=statement" class="btn">📑 Statement</a>
+          <button class="btn" onclick="downloadInventoryReport()">📊 Report</button>
+          <a href="/?page=purchase" class="btn primary">📥 Stock In</a>
+          <a href="/?page=sales" class="btn success">📤 Stock Out</a>
+          <a href="/?page=reference" class="btn info">📋 Ref Report</a>
+          <a href="/?page=statement" class="btn">📑 History</a>
         </div>
       </div>
 
-      <!-- Search and Filter Section -->
       <div class="search-section">
         <div class="form-row">
           <label style="flex: 2;">
-            Search Items
-            <input type="text" id="searchInput" placeholder="Search by SKU, Name, or Category..." oninput="searchInventory()">
-          </label>
-          <label>
-            Date From
-            <input type="date" id="dateFrom" onchange="searchInventory()">
-          </label>
-          <label>
-            Date To
-            <input type="date" id="dateTo" onchange="searchInventory()">
-          </label>
-          <label style="align-self: flex-end;">
-            <button type="button" class="btn small danger" onclick="clearSearch()" style="margin-top: 5px;">Clear</button>
+            Search Database
+            <input type="text" id="searchInput" placeholder="Search Ref Code, Name..." oninput="searchInventory()">
           </label>
         </div>
       </div>
@@ -1546,286 +1022,133 @@ function getDashboardPage() {
         <thead>
           <tr>
             <th>#</th>
-            <th>SKU</th>
+            <th>Ref Code</th>
             <th>Name</th>
             <th>Category</th>
             <th>Qty</th>
-            <th>Unit Cost</th>
-            <th>Unit Price</th>
-            <th>Total Value</th>
-            <th>Potential Value</th>
-            <th>Date Added</th>
+            <th>Buy Price</th>
+            <th>Sell Price</th>
+            <th>Stock Value</th>
             <th>Action</th>
           </tr>
         </thead>
         <tbody id="inventoryBody"></tbody>
-        <tfoot>
-          <tr class="subtotal-row">
-            <td colspan="7"><strong>Subtotal:</strong></td>
-            <td><strong id="totalInventoryValue">RM 0.00</strong></td>
-            <td><strong id="totalPotentialValue">RM 0.00</strong></td>
-            <td colspan="2"></td>
-          </tr>
-        </tfoot>
       </table>
     </div>
   </div>
 
-  <!-- Edit Item Modal -->
   <div id="editModal" class="modal">
     <div class="modal-content">
       <div class="modal-header">
-        <h3>Edit Item</h3>
+        <h3>Edit Stock</h3>
         <span class="close" onclick="closeEditModal()">&times;</span>
       </div>
       <form id="editItemForm">
         <input type="hidden" id="editItemId">
         <div class="form-row">
-          <label>SKU <input type="text" id="editItemSKU" required></label>
+          <label>Ref Code <input type="text" id="editItemSKU" required></label>
           <label>Name <input type="text" id="editItemName" required></label>
           <label>Category <input type="text" id="editItemCategory" required></label>
         </div>
         <div class="form-row">
-          <label>Quantity <input type="number" id="editItemQty" min="1" required></label>
-          <label>Unit Cost (RM) <input type="number" id="editItemUnitCost" step="0.01" min="0.01" required></label>
-          <label>Unit Price (RM) <input type="number" id="editItemUnitPrice" step="0.01" min="0.01" required></label>
+          <label>Qty <input type="number" id="editItemQty" min="1" required></label>
+          <label>Buy Price <input type="number" id="editItemUnitCost" step="0.01" required></label>
+          <label>Sell Price <input type="number" id="editItemUnitPrice" step="0.01" required></label>
         </div>
-        <div class="controls">
-          <button type="submit" class="btn primary">Update Item</button>
-          <button type="button" class="btn danger" onclick="closeEditModal()">Cancel</button>
-        </div>
+        <button type="submit" class="btn primary">Update</button>
       </form>
     </div>
   </div>
 
-  <footer>© 2025 Inventory Management System | Rex_Ho</footer>
-
   <script>${getJavaScript()}</script>
   <script>
     let inventoryItems = [];
-    let currentPurchaseId = null;
-    let currentSalesId = null;
 
+    // Login History Loader
     async function loadLoginHistory() {
       try {
         const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
         const response = await fetch('/api/login-history', {
-          headers: {
-            'Content-Type': 'application/json',
-            'user': JSON.stringify(user)
-          }
+          headers: { 'Content-Type': 'application/json', 'user': JSON.stringify(user) }
         });
-        
         const history = await response.json();
         const container = document.getElementById('loginHistory');
-        
         if (history.length === 0) {
-          container.innerHTML = '<div class="empty-state">No login history available.</div>';
+          container.innerHTML = '<div class="empty-state">No logs.</div>';
         } else {
           container.innerHTML = '';
-          history.forEach((entry, index) => {
+          history.forEach(entry => {
             const entryDiv = document.createElement('div');
             entryDiv.className = 'login-history-item';
-            const timeAgo = getTimeAgo(new Date(entry.loginTime));
-            const isCurrentUser = entry.username === user.username;
-            
             entryDiv.innerHTML = \`
               <div class="login-history-header">
-                <div class="user-info">
-                  <span class="user-avatar">\${isCurrentUser ? '👤' : '👥'}</span>
-                  <div>
-                    <strong class="username \${isCurrentUser ? 'current-user' : ''}">\${entry.username}</strong>
-                    <div class="login-time">\${timeAgo}</div>
-                  </div>
-                </div>
-                <div class="login-status success">Successful</div>
+                <strong>\${entry.username}</strong>
+                <span class="login-status success">Logged In</span>
               </div>
-              <div class="login-details">
-                <div class="detail-item">
-                  <span class="detail-label">IP Address:</span>
-                  <span class="detail-value">\${entry.ip || 'N/A'}</span>
-                </div>
-                <div class="detail-item">
-                  <span class="detail-label">Time:</span>
-                  <span class="detail-value">\${new Date(entry.loginTime).toLocaleString()}</span>
-                </div>
-                <div class="detail-item">
-                  <span class="detail-label">Device:</span>
-                  <span class="detail-value">\${getDeviceInfo(entry.userAgent)}</span>
-                </div>
+              <div style="font-size:0.8em; color:#aaa;">
+                IP: \${entry.ip || 'N/A'} | Time: \${new Date(entry.loginTime).toLocaleString()}
               </div>
             \`;
             container.appendChild(entryDiv);
           });
         }
-      } catch (error) {
-        console.error('Error loading login history:', error);
-        document.getElementById('loginHistory').innerHTML = '<div class="error-state">Failed to load login history.</div>';
-      }
+      } catch (error) { console.error(error); }
     }
 
-    function getTimeAgo(date) {
-      const now = new Date();
-      const diffInSeconds = Math.floor((now - date) / 1000);
-      
-      if (diffInSeconds < 60) return 'Just now';
-      if (diffInSeconds < 3600) return \`\${Math.floor(diffInSeconds / 60)} minutes ago\`;
-      if (diffInSeconds < 86400) return \`\${Math.floor(diffInSeconds / 3600)} hours ago\`;
-      return \`\${Math.floor(diffInSeconds / 86400)} days ago\`;
-    }
+    function refreshLoginHistory() { loadLoginHistory(); }
 
-    function getDeviceInfo(userAgent) {
-      if (!userAgent) return 'Unknown';
-      
-      if (userAgent.includes('Mobile')) {
-        return '📱 Mobile';
-      } else if (userAgent.includes('Tablet')) {
-        return '📱 Tablet';
-      } else {
-        return '💻 Desktop';
-      }
-    }
-
-    function refreshLoginHistory() {
-      loadLoginHistory();
-    }
-
+    // ===============================================
+    // FRONTEND LOGIC UPDATED FOR NEW SCHEMA
+    // ===============================================
     async function loadInventory() {
       try {
         const search = document.getElementById('searchInput').value;
-        const dateFrom = document.getElementById('dateFrom').value;
-        const dateTo = document.getElementById('dateTo').value;
-        
-        let url = '/api/inventory';
-        const params = new URLSearchParams();
-        
-        if (search) params.append('search', search);
-        if (dateFrom) params.append('dateFrom', dateFrom);
-        if (dateTo) params.append('dateTo', dateTo);
-        
-        if (params.toString()) {
-          url += '?' + params.toString();
-        }
+        let url = '/api/inventory?search=' + encodeURIComponent(search);
         
         const response = await fetch(url);
         inventoryItems = await response.json();
         const body = document.getElementById('inventoryBody');
-        body.innerHTML = inventoryItems.length ? '' : '<tr><td colspan="11" class="no-data">No items in inventory</td></tr>';
-
-        let totalInventoryValue = 0;
-        let totalPotentialValue = 0;
+        body.innerHTML = inventoryItems.length ? '' : '<tr><td colspan="9" class="no-data">No data found</td></tr>';
 
         inventoryItems.forEach((item, i) => {
-          const inventoryValue = (item.quantity || 0) * (item.unitCost || 0);
-          const potentialValue = (item.quantity || 0) * (item.unitPrice || 0);
-          totalInventoryValue += inventoryValue;
-          totalPotentialValue += potentialValue;
+          // MAPPING NEW FIELDS
+          const ref = item.ref_code || 'N/A';
+          const qty = item.qty_on_hand || 0;
+          const buy = item.buy_price || 0;
+          const sell = item.sell_price || 0;
+          const totalVal = qty * buy;
 
           body.innerHTML += \`
             <tr>
               <td>\${i + 1}</td>
-              <td><strong>\${item.sku || 'N/A'}</strong></td>
-              <td>\${item.name || 'Unnamed Item'}</td>
-              <td><span class="category-tag">\${item.category || 'Uncategorized'}</span></td>
-              <td><span class="quantity-badge">\${item.quantity || 0}</span></td>
-              <td>RM \${(item.unitCost || 0).toFixed(2)}</td>
-              <td>RM \${(item.unitPrice || 0).toFixed(2)}</td>
-              <td><strong class="value-text">RM \${inventoryValue.toFixed(2)}</strong></td>
-              <td><strong class="potential-text">RM \${potentialValue.toFixed(2)}</strong></td>
-              <td class="date-text">\${item.dateAdded || new Date(item.createdAt).toLocaleDateString()}</td>
-              <td class="action-buttons">
-                <button class="btn small" onclick="openEditModal('\${item._id}')">✏️ Edit</button>
-                <button class="btn small danger" onclick="deleteItem('\${item._id}')">🗑️ Delete</button>
+              <td><strong>\${ref}</strong></td>
+              <td>\${item.name || 'Unnamed'}</td>
+              <td><span class="category-tag">\${item.category || '-'}</span></td>
+              <td><span class="quantity-badge">\${qty}</span></td>
+              <td>RM \${buy.toFixed(2)}</td>
+              <td>RM \${sell.toFixed(2)}</td>
+              <td><strong class="value-text">RM \${totalVal.toFixed(2)}</strong></td>
+              <td>
+                <button class="btn small" onclick="openEditModal('\${item._id}')">✏️</button>
+                <button class="btn small danger" onclick="deleteItem('\${item._id}')">🗑️</button>
               </td>
             </tr>\`;
         });
-
-        // Update table footer
-        document.getElementById('totalInventoryValue').textContent = \`RM \${totalInventoryValue.toFixed(2)}\`;
-        document.getElementById('totalPotentialValue').textContent = \`RM \${totalPotentialValue.toFixed(2)}\`;
-
-        // Update summary cards
-        document.getElementById('totalInventoryValueSummary').textContent = \`RM \${totalInventoryValue.toFixed(2)}\`;
-        document.getElementById('totalPotentialValueSummary').textContent = \`RM \${totalPotentialValue.toFixed(2)}\`;
-        document.getElementById('totalItemsCount').textContent = inventoryItems.length;
-      } catch (error) {
-        console.error('Error loading inventory:', error);
-      }
+      } catch (error) { console.error(error); }
     }
 
-    function searchInventory() {
-      loadInventory();
-    }
+    function searchInventory() { loadInventory(); }
 
-    function clearSearch() {
-      document.getElementById('searchInput').value = '';
-      document.getElementById('dateFrom').value = '';
-      document.getElementById('dateTo').value = '';
-      loadInventory();
-    }
-
-    function openEditModal(itemId) {
-      const item = inventoryItems.find(i => i._id === itemId);
-      if (!item) return;
-
-      document.getElementById('editItemId').value = item._id;
-      document.getElementById('editItemSKU').value = item.sku || '';
-      document.getElementById('editItemName').value = item.name || '';
-      document.getElementById('editItemCategory').value = item.category || '';
-      document.getElementById('editItemQty').value = item.quantity || 1;
-      document.getElementById('editItemUnitCost').value = item.unitCost || 0;
-      document.getElementById('editItemUnitPrice').value = item.unitPrice || 0;
-
-      document.getElementById('editModal').style.display = 'block';
-    }
-
-    function closeEditModal() {
-      document.getElementById('editModal').style.display = 'none';
-    }
-
-    document.getElementById('editItemForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      
-      const itemId = document.getElementById('editItemId').value;
-      const updatedItem = {
-        sku: document.getElementById('editItemSKU').value,
-        name: document.getElementById('editItemName').value,
-        category: document.getElementById('editItemCategory').value,
-        quantity: parseInt(document.getElementById('editItemQty').value) || 1,
-        unitCost: parseFloat(document.getElementById('editItemUnitCost').value) || 0,
-        unitPrice: parseFloat(document.getElementById('editItemUnitPrice').value) || 0
-      };
-
-      try {
-        const response = await fetch(\`/api/inventory/\${itemId}\`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(updatedItem)
-        });
-
-        const data = await response.json();
-        
-        if (response.ok) {
-          closeEditModal();
-          loadInventory();
-          alert('Item updated successfully!');
-        } else {
-          alert('Failed to update item: ' + data.error);
-        }
-      } catch (error) {
-        alert('Error updating item: ' + error.message);
-      }
-    });
-
+    // ADD ITEM - Sends new keys
     document.getElementById('itemForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const item = {
-        sku: document.getElementById('itemSKU').value,
+        ref_code: document.getElementById('itemSKU').value,     // Mapped to ref_code
         name: document.getElementById('itemName').value,
         category: document.getElementById('itemCategory').value,
-        quantity: parseInt(document.getElementById('itemQty').value) || 1,
-        unitCost: parseFloat(document.getElementById('itemUnitCost').value) || 0,
-        unitPrice: parseFloat(document.getElementById('itemUnitPrice').value) || 0
+        qty_on_hand: parseInt(document.getElementById('itemQty').value) || 0, // Mapped to qty_on_hand
+        buy_price: parseFloat(document.getElementById('itemUnitCost').value) || 0, // Mapped to buy_price
+        sell_price: parseFloat(document.getElementById('itemUnitPrice').value) || 0 // Mapped to sell_price
       };
 
       try {
@@ -1834,347 +1157,100 @@ function getDashboardPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(item)
         });
-
-        const data = await response.json();
-        
         if (response.ok) {
           document.getElementById('itemForm').reset();
           loadInventory();
-          alert('Item added successfully!');
-        } else {
-          alert('Failed to add item: ' + data.error);
-        }
-      } catch (error) {
-        alert('Error adding item: ' + error.message);
+          alert('Stock added successfully');
+        } else { alert('Error adding item'); }
+      } catch (error) { alert('Error: ' + error.message); }
+    });
+
+    // EDIT MODAL - Reads/Writes new keys
+    function openEditModal(itemId) {
+      const item = inventoryItems.find(i => i._id === itemId);
+      if (!item) return;
+      document.getElementById('editItemId').value = item._id;
+      document.getElementById('editItemSKU').value = item.ref_code || '';
+      document.getElementById('editItemName').value = item.name || '';
+      document.getElementById('editItemCategory').value = item.category || '';
+      document.getElementById('editItemQty').value = item.qty_on_hand || 0;
+      document.getElementById('editItemUnitCost').value = item.buy_price || 0;
+      document.getElementById('editItemUnitPrice').value = item.sell_price || 0;
+      document.getElementById('editModal').style.display = 'block';
+    }
+
+    function closeEditModal() { document.getElementById('editModal').style.display = 'none'; }
+
+    document.getElementById('editItemForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const itemId = document.getElementById('editItemId').value;
+      const updatedItem = {
+        ref_code: document.getElementById('editItemSKU').value,
+        name: document.getElementById('editItemName').value,
+        category: document.getElementById('editItemCategory').value,
+        qty_on_hand: parseInt(document.getElementById('editItemQty').value),
+        buy_price: parseFloat(document.getElementById('editItemUnitCost').value),
+        sell_price: parseFloat(document.getElementById('editItemUnitPrice').value)
+      };
+
+      const response = await fetch(\`/api/inventory/\${itemId}\`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedItem)
+      });
+      if (response.ok) {
+        closeEditModal();
+        loadInventory();
+        alert('Updated successfully');
       }
     });
 
     async function deleteItem(id) {
-      if (!confirm('Are you sure you want to delete this item?')) return;
-      
-      try {
-        const response = await fetch('/api/inventory/' + id, { method: 'DELETE' });
-        const data = await response.json();
-        
-        if (response.ok) {
-          loadInventory();
-          alert('Item deleted successfully!');
-        } else {
-          alert('Failed to delete item: ' + data.error);
-        }
-      } catch (error) {
-        alert('Error deleting item: ' + error.message);
-      }
+      if(!confirm('Delete this item?')) return;
+      await fetch('/api/inventory/' + id, { method: 'DELETE' });
+      loadInventory();
     }
 
     async function downloadInventoryReport() {
-      try {
-        const search = document.getElementById('searchInput').value;
-        const dateFrom = document.getElementById('dateFrom').value;
-        const dateTo = document.getElementById('dateTo').value;
-        
-        let url = '/api/inventory';
-        const params = new URLSearchParams();
-        
-        if (search) params.append('search', search);
-        if (dateFrom) params.append('dateFrom', dateFrom);
-        if (dateTo) params.append('dateTo', dateTo);
-        
-        if (params.toString()) {
-          url += '?' + params.toString();
-        }
-        
-        const response = await fetch(url);
-        const items = await response.json();
-        
-        if (items.length === 0) {
-          alert('No inventory items to generate report!');
-          return;
-        }
+      // Simplified report generation for dashboard button
+      const response = await fetch('/api/inventory');
+      const items = await response.json();
+      const reportData = {
+        id: 'REP-' + Date.now(),
+        date: new Date().toLocaleString(),
+        items: items
+      };
+      
+      // Save report
+      await fetch('/api/statements/add', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ reportData })
+      });
 
-        let totalInventoryValue = 0;
-        let totalPotentialValue = 0;
-        
-        items.forEach(item => {
-          totalInventoryValue += (item.quantity || 0) * (item.unitCost || 0);
-          totalPotentialValue += (item.quantity || 0) * (item.unitPrice || 0);
-        });
-
-        const dateRange = dateFrom && dateTo ? \`\${dateFrom} to \${dateTo}\` : 'All Items';
-
-        const reportData = {
-          id: 'REP-' + Date.now(),
-          date: new Date().toLocaleString(),
-          dateRange: dateRange,
-          items: items,
-          totalInventoryValue: \`RM \${totalInventoryValue.toFixed(2)}\`,
-          totalPotentialValue: \`RM \${totalPotentialValue.toFixed(2)}\`
-        };
-
-        await fetch('/api/statements/add', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reportData })
-        });
-
-        const pdfResponse = await fetch('/generate-inventory-report-pdf', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reportData })
-        });
-
-        if (pdfResponse.ok) {
-          const blob = await pdfResponse.blob();
-          const url = window.URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = \`inventory-report-\${reportData.id}.pdf\`;
-          a.click();
-          window.URL.revokeObjectURL(url);
-          alert('Inventory report generated and saved to statements!');
-        } else {
-          throw new Error('PDF generation failed');
-        }
-      } catch (error) {
-        console.error('Download report error:', error);
-        alert('Error generating PDF report.');
+      // Generate PDF
+      const pdfResponse = await fetch('/generate-inventory-report-pdf', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ reportData })
+      });
+      
+      if(pdfResponse.ok) {
+        const blob = await pdfResponse.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'inventory_report.pdf';
+        a.click();
       }
     }
 
     document.addEventListener('DOMContentLoaded', () => {
       const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
-      if (!user.username) {
-        window.location.href = '/';
-        return;
-      }
+      if (!user.username) { window.location.href = '/'; return; }
       document.getElementById('username').textContent = user.username;
       loadLoginHistory();
       loadInventory();
-    });
-  </script>
-</body>
-</html>`;
-}
-
-function getReferencePage() {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Generate Reference Report | Inventory System</title>
-  <style>${getCSS()}</style>
-</head>
-<body>
-  <div class="container">
-    <div class="topbar">
-      <h2>📋 Generate Reference Report</h2>
-      <div class="topbar-actions">
-        <span>Welcome, <strong id="username"></strong></span>
-        <button class="btn small ghost" onclick="toggleTheme()">🌓</button>
-        <button class="btn small" onclick="window.location.href='/?page=dashboard'">← Dashboard</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <h3>Select Items for Reference Report</h3>
-      <div class="search-section">
-        <div class="form-row">
-          <label style="flex: 1;">
-            Search Products
-            <input type="text" id="referenceSearch" placeholder="Search by SKU, Name, or Category..." oninput="searchReferenceItems()">
-          </label>
-        </div>
-      </div>
-      <div id="availableItems" class="invoice-items-list"></div>
-    </div>
-
-    <div class="card">
-      <h3>Reference Report Items</h3>
-      <div id="referenceItems"></div>
-      <div class="invoice-total">
-        <h4>Total: RM <span id="referenceTotal">0.00</span></h4>
-      </div>
-      <div class="controls">
-        <button class="btn info" id="downloadPdf" onclick="downloadReferencePDF()">Download PDF</button>
-        <button class="btn danger" onclick="clearReference()">Clear</button>
-      </div>
-    </div>
-  </div>
-
-  <footer>© 2025 Inventory Management System | Rex_Ho</footer>
-
-  <script>${getJavaScript()}</script>
-  <script>
-    let selectedReferenceItems = [];
-    let availableItems = [];
-
-    async function loadAvailableItems() {
-      try {
-        const search = document.getElementById('referenceSearch').value;
-        let url = '/api/inventory';
-        
-        if (search) {
-          url += '?search=' + encodeURIComponent(search);
-        }
-        
-        const response = await fetch(url);
-        availableItems = await response.json();
-        const container = document.getElementById('availableItems');
-        container.innerHTML = availableItems.length ? '' : '<p>No items available</p>';
-        
-        availableItems.forEach((item, index) => {
-          const itemDiv = document.createElement('div');
-          itemDiv.className = 'invoice-item';
-          itemDiv.innerHTML = \`
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <div>
-                <strong>\${item.name || 'Unnamed Item'}</strong> (\${item.sku || 'N/A'})<br>
-                <small>Category: \${item.category || 'N/A'} | Available: \${item.quantity || 0} | Price: RM \${(item.unitPrice || 0).toFixed(2)}</small>
-              </div>
-              <div>
-                <input type="number" id="qty-\${index}" min="1" max="\${item.quantity || 0}" value="1" style="width: 80px; margin-right: 10px;">
-                <button class="btn small" onclick="addToReference(\${index})">Add to Report</button>
-              </div>
-            </div>
-          \`;
-          container.appendChild(itemDiv);
-        });
-      } catch (error) {
-        console.error('Error loading items:', error);
-      }
-    }
-
-    function searchReferenceItems() {
-      loadAvailableItems();
-    }
-
-    function addToReference(index) {
-      const item = availableItems[index];
-      const quantity = parseInt(document.getElementById(\`qty-\${index}\`).value) || 1;
-      
-      if (quantity > (item.quantity || 0)) {
-        alert(\`Only \${item.quantity || 0} items available!\`);
-        return;
-      }
-
-      const existingIndex = selectedReferenceItems.findIndex(selected => selected.index === index);
-      if (existingIndex > -1) {
-        selectedReferenceItems[existingIndex].invoiceQty = quantity;
-      } else {
-        selectedReferenceItems.push({ 
-          index: index, 
-          ...item, 
-          invoiceQty: quantity 
-        });
-      }
-      
-      updateReferenceDisplay();
-    }
-
-    function updateReferenceDisplay() {
-      const container = document.getElementById('referenceItems');
-      const totalElement = document.getElementById('referenceTotal');
-      container.innerHTML = selectedReferenceItems.length ? '' : '<p>No items in reference report</p>';
-      
-      let total = 0;
-      selectedReferenceItems.forEach((item, i) => {
-        const quantity = item.invoiceQty || item.quantity || 1;
-        const unitPrice = item.unitPrice || 0;
-        const itemTotal = quantity * unitPrice;
-        total += itemTotal;
-        
-        const itemDiv = document.createElement('div');
-        itemDiv.className = 'invoice-item';
-        itemDiv.innerHTML = \`
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div>
-              <strong>\${item.name || 'Unnamed Item'}</strong> (\${item.sku || 'N/A'})<br>
-              <small>Qty: \${quantity} × RM \${unitPrice.toFixed(2)} = RM \${itemTotal.toFixed(2)}</small>
-            </div>
-            <button class="btn small danger" onclick="removeFromReference(\${i})">Remove</button>
-          </div>
-        \`;
-        container.appendChild(itemDiv);
-      });
-      
-      totalElement.textContent = total.toFixed(2);
-      document.getElementById('downloadPdf').disabled = selectedReferenceItems.length === 0;
-    }
-
-    function removeFromReference(index) {
-      selectedReferenceItems.splice(index, 1);
-      updateReferenceDisplay();
-    }
-
-    function clearReference() {
-      selectedReferenceItems = [];
-      updateReferenceDisplay();
-    }
-
-    async function downloadReferencePDF() {
-      if (selectedReferenceItems.length === 0) {
-        alert('Please add items to the reference report first!');
-        return;
-      }
-
-      const referenceData = {
-        date: new Date().toLocaleString(),
-        items: selectedReferenceItems,
-        total: parseFloat(document.getElementById('referenceTotal').textContent) || 0
-      };
-
-      try {
-        // Save reference report first to get the report number
-        const saveResponse = await fetch('/api/reference-reports/add', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ referenceData })
-        });
-
-        const saveResult = await saveResponse.json();
-        
-        if (!saveResponse.ok) {
-          throw new Error(saveResult.error || 'Failed to save reference report');
-        }
-
-        // Now generate PDF with the report number
-        referenceData.reportNumber = saveResult.reportNumber;
-        referenceData._id = saveResult.id; // Add the ID for later retrieval
-        
-        const pdfResponse = await fetch('/generate-reference-report-pdf', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ referenceData })
-        });
-
-        if (pdfResponse.ok) {
-          const blob = await pdfResponse.blob();
-          const url = window.URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = \`reference-report-\${referenceData.reportNumber}.pdf\`;
-          a.click();
-          window.URL.revokeObjectURL(url);
-          
-          alert('Reference Report PDF generated successfully! Report number: ' + referenceData.reportNumber);
-          clearReference(); // Clear after successful download
-        } else {
-          throw new Error('PDF generation failed');
-        }
-      } catch (error) {
-        alert('Error generating PDF: ' + error.message);
-      }
-    }
-
-    document.addEventListener('DOMContentLoaded', () => {
-      const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
-      if (!user.username) {
-        window.location.href = '/';
-        return;
-      }
-      document.getElementById('username').textContent = user.username;
-      loadAvailableItems();
     });
   </script>
 </body>
@@ -2186,250 +1262,121 @@ function getPurchasePage() {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Purchase | Inventory System</title>
+  <title>Stock In | Secure Inventory</title>
   <style>${getCSS()}</style>
 </head>
 <body>
   <div class="container">
     <div class="topbar">
-      <h2>📥 Purchase (Stock In)</h2>
-      <div class="topbar-actions">
-        <span>Welcome, <strong id="username"></strong></span>
-        <button class="btn small ghost" onclick="toggleTheme()">🌓</button>
-        <button class="btn small" onclick="window.location.href='/?page=dashboard'">← Dashboard</button>
-      </div>
+      <h2>📥 Stock In (Purchase)</h2>
+      <button class="btn small" onclick="window.location.href='/?page=dashboard'">← Back</button>
     </div>
-
     <div class="card">
-      <h3>Purchase Details</h3>
       <div class="form-row">
-        <label>Supplier <input type="text" id="supplier" placeholder="Supplier name"></label>
-        <label>Purchase Date <input type="date" id="purchaseDate" value="${new Date().toISOString().split('T')[0]}"></label>
+        <label>Supplier <input type="text" id="supplier" placeholder="Supplier Name"></label>
       </div>
-    </div>
-
-    <div class="card">
-      <h3>Select Items to Purchase</h3>
-      <div class="search-section">
-        <div class="form-row">
-          <label style="flex: 1;">
-            Search Products
-            <input type="text" id="purchaseSearch" placeholder="Search by SKU, Name, or Category..." oninput="searchPurchaseItems()">
-          </label>
-        </div>
-      </div>
+      <h3>Select Stock</h3>
       <div id="availableItems" class="invoice-items-list"></div>
     </div>
-
     <div class="card">
-      <h3>Purchase Items</h3>
+      <h3>Purchase List</h3>
       <div id="purchaseItems"></div>
-      <div class="invoice-total">
-        <h4>Total: RM <span id="purchaseTotal">0.00</span></h4>
-      </div>
-      <div class="controls">
-        <button class="btn primary" onclick="processPurchase()">Process Purchase</button>
-        <button class="btn danger" onclick="clearPurchase()">Clear</button>
-      </div>
+      <div class="invoice-total">Total: RM <span id="purchaseTotal">0.00</span></div>
+      <button class="btn primary full" onclick="processPurchase()">Confirm Purchase</button>
     </div>
   </div>
-
-  <footer>© 2025 Inventory Management System | Rex_Ho</footer>
-
   <script>${getJavaScript()}</script>
   <script>
-    let selectedPurchaseItems = [];
+    let selectedItems = [];
     let availableItems = [];
-    let latestPurchaseData = null;
 
-    async function loadAvailableItems() {
-      try {
-        const search = document.getElementById('purchaseSearch').value;
-        let url = '/api/inventory';
-        
-        if (search) {
-          url += '?search=' + encodeURIComponent(search);
-        }
-        
-        const response = await fetch(url);
-        availableItems = await response.json();
-        const container = document.getElementById('availableItems');
-        container.innerHTML = availableItems.length ? '' : '<p>No items available</p>';
-        
-        availableItems.forEach((item, index) => {
-          const itemDiv = document.createElement('div');
-          itemDiv.className = 'invoice-item';
-          itemDiv.innerHTML = \`
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <div>
-                <strong>\${item.name || 'Unnamed Item'}</strong> (\${item.sku || 'N/A'})<br>
-                <small>Category: \${item.category || 'N/A'} | Current Stock: \${item.quantity || 0} | Cost: RM \${(item.unitCost || 0).toFixed(2)}</small>
-              </div>
-              <div>
-                <input type="number" id="purchase-qty-\${index}" min="1" value="1" style="width: 80px; margin-right: 10px;">
-                <button class="btn small" onclick="addToPurchase(\${index})">Add to Purchase</button>
-              </div>
-            </div>
-          \`;
-          container.appendChild(itemDiv);
-        });
-      } catch (error) {
-        console.error('Error loading items:', error);
-      }
-    }
-
-    function searchPurchaseItems() {
-      loadAvailableItems();
-    }
-
-    function addToPurchase(index) {
-      const item = availableItems[index];
-      const quantity = parseInt(document.getElementById(\`purchase-qty-\${index}\`).value) || 1;
-      
-      const existingIndex = selectedPurchaseItems.findIndex(selected => selected.index === index);
-      if (existingIndex > -1) {
-        selectedPurchaseItems[existingIndex].quantity = quantity;
-      } else {
-        selectedPurchaseItems.push({ 
-          index: index, 
-          itemId: item._id,
-          name: item.name || 'Unnamed Item',
-          sku: item.sku || 'N/A',
-          category: item.category || 'N/A',
-          unitCost: item.unitCost || 0,
-          quantity: quantity
-        });
-      }
-      
-      updatePurchaseDisplay();
-    }
-
-    function updatePurchaseDisplay() {
-      const container = document.getElementById('purchaseItems');
-      const totalElement = document.getElementById('purchaseTotal');
-      container.innerHTML = selectedPurchaseItems.length ? '' : '<p>No items in purchase</p>';
-      
-      let total = 0;
-      selectedPurchaseItems.forEach((item, i) => {
-        const itemTotal = (item.quantity || 1) * (item.unitCost || 0);
-        total += itemTotal;
-        
-        const itemDiv = document.createElement('div');
-        itemDiv.className = 'invoice-item';
-        itemDiv.innerHTML = \`
-          <div style="display: flex; justify-content: space-between; align-items: center;">
+    async function loadAvailable() {
+      const res = await fetch('/api/inventory');
+      availableItems = await res.json();
+      const container = document.getElementById('availableItems');
+      container.innerHTML = '';
+      availableItems.forEach((item, idx) => {
+        // Use new keys
+        const ref = item.ref_code || 'N/A';
+        const cost = item.buy_price || 0;
+        container.innerHTML += \`
+          <div class="invoice-item" style="display:flex; justify-content:space-between;">
+            <div><strong>\${item.name}</strong> (\${ref}) <br> Cost: RM \${cost}</div>
             <div>
-              <strong>\${item.name || 'Unnamed Item'}</strong> (\${item.sku || 'N/A'})<br>
-              <small>Qty: \${item.quantity || 1} × RM \${(item.unitCost || 0).toFixed(2)} = RM \${itemTotal.toFixed(2)}</small>
+              <input type="number" id="qty-\${idx}" value="1" style="width:60px">
+              <button class="btn small" onclick="add(\${idx})">Add</button>
             </div>
-            <button class="btn small danger" onclick="removeFromPurchase(\${i})">Remove</button>
-          </div>
-        \`;
-        container.appendChild(itemDiv);
+          </div>\`;
       });
-      
-      totalElement.textContent = total.toFixed(2);
     }
 
-    function removeFromPurchase(index) {
-      selectedPurchaseItems.splice(index, 1);
-      updatePurchaseDisplay();
+    function add(idx) {
+      const item = availableItems[idx];
+      const qty = parseInt(document.getElementById(\`qty-\${idx}\`).value) || 1;
+      selectedItems.push({
+        itemId: item._id,
+        name: item.name,
+        ref_code: item.ref_code, // Store ref_code
+        buy_price: item.buy_price, // Store buy_price
+        quantity: qty
+      });
+      updateDisplay();
     }
 
-    function clearPurchase() {
-      selectedPurchaseItems = [];
-      updatePurchaseDisplay();
+    function updateDisplay() {
+      const div = document.getElementById('purchaseItems');
+      div.innerHTML = '';
+      let total = 0;
+      selectedItems.forEach((item, i) => {
+        const cost = item.buy_price || 0;
+        const sub = cost * item.quantity;
+        total += sub;
+        div.innerHTML += \`
+          <div class="invoice-item">
+            \${item.name} (x\${item.quantity}) - RM \${sub.toFixed(2)} 
+            <button class="btn small danger" onclick="remove(\${i})">X</button>
+          </div>\`;
+      });
+      document.getElementById('purchaseTotal').textContent = total.toFixed(2);
     }
+
+    function remove(i) { selectedItems.splice(i, 1); updateDisplay(); }
 
     async function processPurchase() {
-      if (selectedPurchaseItems.length === 0) {
-        alert('Please add items to the purchase first!');
-        return;
-      }
-
-      try {
-        const purchaseData = {
-          date: document.getElementById('purchaseDate').value || new Date().toLocaleString(),
-          supplier: document.getElementById('supplier').value || 'N/A',
-          items: selectedPurchaseItems,
-          total: parseFloat(document.getElementById('purchaseTotal').textContent) || 0
-        };
-        
-        const response = await fetch('/api/purchases', {
+      const purchaseData = {
+        supplier: document.getElementById('supplier').value || 'Unknown',
+        items: selectedItems,
+        total: parseFloat(document.getElementById('purchaseTotal').textContent)
+      };
+      
+      const res = await fetch('/api/purchases', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ purchaseData })
+      });
+      
+      if(res.ok) {
+        alert('Purchase success');
+        const data = await res.json();
+        // Generate PDF
+        const pdfRes = await fetch('/generate-purchase-pdf', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ purchaseData })
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ purchaseData: data.purchaseData })
         });
-
-        const data = await response.json();
-        
-        if (response.ok) {
-          latestPurchaseData = data.purchaseData;
-          latestPurchaseData._id = data.id; // Store the ID for PDF generation
-          
-          alert('Purchase processed successfully! Purchase Number: ' + data.purchaseNumber);
-          
-          // Automatically download the PDF after processing
-          await downloadPurchasePDF();
-          
-          clearPurchase(); // Clear items after successful processing
-          loadAvailableItems(); // Refresh available items
-        } else {
-          alert('Failed to process purchase: ' + data.error);
-        }
-      } catch (error) {
-        console.error('Purchase error:', error);
-        alert('Failed to process purchase: ' + error.message);
-      }
-    }
-
-    async function downloadPurchasePDF() {
-      if (!latestPurchaseData) {
-        alert('Please process a purchase first!');
-        return;
-      }
-
-      try {
-        // Fetch the latest purchase data from the database
-        const response = await fetch('/api/purchases/' + latestPurchaseData._id);
-        if (!response.ok) {
-          throw new Error('Purchase not found');
-        }
-        const purchase = await response.json();
-        
-        const pdfResponse = await fetch('/generate-purchase-pdf', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ purchaseData: purchase })
-        });
-
-        if (pdfResponse.ok) {
-          const blob = await pdfResponse.blob();
+        if(pdfRes.ok) {
+          const blob = await pdfRes.blob();
           const url = window.URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
-          a.download = \`purchase-order-\${purchase.purchaseNumber || Date.now()}.pdf\`;
+          a.download = 'purchase.pdf';
           a.click();
-          window.URL.revokeObjectURL(url);
-        } else {
-          const errorData = await pdfResponse.json();
-          throw new Error(errorData.error || 'PDF generation failed');
         }
-      } catch (error) {
-        alert('Error generating PDF: ' + error.message);
+        window.location.reload();
       }
     }
 
-    document.addEventListener('DOMContentLoaded', () => {
-      const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
-      if (!user.username) {
-        window.location.href = '/';
-        return;
-      }
-      document.getElementById('username').textContent = user.username;
-      loadAvailableItems();
-    });
+    loadAvailable();
   </script>
 </body>
 </html>`;
@@ -2440,1339 +1387,370 @@ function getSalesPage() {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sales | Inventory System</title>
+  <title>Stock Out | Secure Inventory</title>
   <style>${getCSS()}</style>
 </head>
 <body>
   <div class="container">
     <div class="topbar">
-      <h2>📤 Sales (Stock Out)</h2>
-      <div class="topbar-actions">
-        <span>Welcome, <strong id="username"></strong></span>
-        <button class="btn small ghost" onclick="toggleTheme()">🌓</button>
-        <button class="btn small" onclick="window.location.href='/?page=dashboard'">← Dashboard</button>
-      </div>
+      <h2>📤 Stock Out (Sales)</h2>
+      <button class="btn small" onclick="window.location.href='/?page=dashboard'">← Back</button>
     </div>
-
     <div class="card">
-      <h3>Sales Details</h3>
       <div class="form-row">
-        <label>Customer <input type="text" id="customer" placeholder="Customer name"></label>
-        <label>Sales Date <input type="date" id="salesDate" value="${new Date().toISOString().split('T')[0]}"></label>
+        <label>Customer <input type="text" id="customer" placeholder="Customer Name"></label>
       </div>
-    </div>
-
-    <div class="card">
-      <h3>Select Items to Sell</h3>
-      <div class="search-section">
-        <div class="form-row">
-          <label style="flex: 1;">
-            Search Products
-            <input type="text" id="salesSearch" placeholder="Search by SKU, Name, or Category..." oninput="searchSalesItems()">
-          </label>
-        </div>
-      </div>
+      <h3>Select Stock</h3>
       <div id="availableItems" class="invoice-items-list"></div>
     </div>
-
     <div class="card">
-      <h3>Sales Items</h3>
+      <h3>Sales List</h3>
       <div id="salesItems"></div>
-      <div class="invoice-total">
-        <h4>Total: RM <span id="salesTotal">0.00</span></h4>
-      </div>
-      <div class="controls">
-        <button class="btn success" onclick="processSale()">Process Sale</button>
-        <button class="btn danger" onclick="clearSale()">Clear</button>
-      </div>
+      <div class="invoice-total">Total: RM <span id="salesTotal">0.00</span></div>
+      <button class="btn success full" onclick="processSale()">Confirm Sale</button>
     </div>
   </div>
-
-  <footer>© 2025 Inventory Management System | Rex_Ho</footer>
-
   <script>${getJavaScript()}</script>
   <script>
-    let selectedSalesItems = [];
+    let selectedItems = [];
     let availableItems = [];
-    let latestSalesData = null;
 
-    async function loadAvailableItems() {
-      try {
-        const search = document.getElementById('salesSearch').value;
-        let url = '/api/inventory';
-        
-        if (search) {
-          url += '?search=' + encodeURIComponent(search);
-        }
-        
-        const response = await fetch(url);
-        availableItems = await response.json();
-        const container = document.getElementById('availableItems');
-        container.innerHTML = availableItems.length ? '' : '<p>No items available</p>';
-        
-        availableItems.forEach((item, index) => {
-          const itemDiv = document.createElement('div');
-          itemDiv.className = 'invoice-item';
-          itemDiv.innerHTML = \`
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <div>
-                <strong>\${item.name || 'Unnamed Item'}</strong> (\${item.sku || 'N/A'})<br>
-                <small>Category: \${item.category || 'N/A'} | Current Stock: \${item.quantity || 0} | Price: RM \${(item.unitPrice || 0).toFixed(2)}</small>
-              </div>
-              <div>
-                <input type="number" id="sales-qty-\${index}" min="1" max="\${item.quantity || 0}" value="1" style="width: 80px; margin-right: 10px;">
-                <button class="btn small" onclick="addToSale(\${index})">Add to Sale</button>
-              </div>
-            </div>
-          \`;
-          container.appendChild(itemDiv);
-        });
-      } catch (error) {
-        console.error('Error loading items:', error);
-      }
-    }
-
-    function searchSalesItems() {
-      loadAvailableItems();
-    }
-
-    function addToSale(index) {
-      const item = availableItems[index];
-      const quantity = parseInt(document.getElementById(\`sales-qty-\${index}\`).value) || 1;
-      
-      if (quantity > (item.quantity || 0)) {
-        alert(\`Only \${item.quantity || 0} items available in stock!\`);
-        return;
-      }
-
-      const existingIndex = selectedSalesItems.findIndex(selected => selected.index === index);
-      if (existingIndex > -1) {
-        selectedSalesItems[existingIndex].quantity = quantity;
-      } else {
-        selectedSalesItems.push({ 
-          index: index, 
-          itemId: item._id,
-          name: item.name || 'Unnamed Item',
-          sku: item.sku || 'N/A',
-          category: item.category || 'N/A',
-          unitPrice: item.unitPrice || 0,
-          quantity: quantity
-        });
-      }
-      
-      updateSalesDisplay();
-    }
-
-    function updateSalesDisplay() {
-      const container = document.getElementById('salesItems');
-      const totalElement = document.getElementById('salesTotal');
-      container.innerHTML = selectedSalesItems.length ? '' : '<p>No items in sale</p>';
-      
-      let total = 0;
-      selectedSalesItems.forEach((item, i) => {
-        const itemTotal = (item.quantity || 1) * (item.unitPrice || 0);
-        total += itemTotal;
-        
-        const itemDiv = document.createElement('div');
-        itemDiv.className = 'invoice-item';
-        itemDiv.innerHTML = \`
-          <div style="display: flex; justify-content: space-between; align-items: center;">
+    async function loadAvailable() {
+      const res = await fetch('/api/inventory');
+      availableItems = await res.json();
+      const container = document.getElementById('availableItems');
+      container.innerHTML = '';
+      availableItems.forEach((item, idx) => {
+        const ref = item.ref_code || 'N/A';
+        const price = item.sell_price || 0;
+        const stock = item.qty_on_hand || 0;
+        container.innerHTML += \`
+          <div class="invoice-item" style="display:flex; justify-content:space-between;">
+            <div><strong>\${item.name}</strong> (\${ref}) <br> Price: RM \${price} | Stock: \${stock}</div>
             <div>
-              <strong>\${item.name || 'Unnamed Item'}</strong> (\${item.sku || 'N/A'})<br>
-              <small>Qty: \${item.quantity || 1} × RM \${(item.unitPrice || 0).toFixed(2)} = RM \${itemTotal.toFixed(2)}</small>
+              <input type="number" id="qty-\${idx}" value="1" max="\${stock}" style="width:60px">
+              <button class="btn small" onclick="add(\${idx})">Add</button>
             </div>
-            <button class="btn small danger" onclick="removeFromSale(\${i})">Remove</button>
-          </div>
-        \`;
-        container.appendChild(itemDiv);
+          </div>\`;
       });
+    }
+
+    function add(idx) {
+      const item = availableItems[idx];
+      const qty = parseInt(document.getElementById(\`qty-\${idx}\`).value) || 1;
+      const stock = item.qty_on_hand || 0;
       
-      totalElement.textContent = total.toFixed(2);
+      if(qty > stock) { alert('Not enough stock!'); return; }
+      
+      selectedItems.push({
+        itemId: item._id,
+        name: item.name,
+        ref_code: item.ref_code,
+        sell_price: item.sell_price,
+        quantity: qty
+      });
+      updateDisplay();
     }
 
-    function removeFromSale(index) {
-      selectedSalesItems.splice(index, 1);
-      updateSalesDisplay();
+    function updateDisplay() {
+      const div = document.getElementById('salesItems');
+      div.innerHTML = '';
+      let total = 0;
+      selectedItems.forEach((item, i) => {
+        const price = item.sell_price || 0;
+        const sub = price * item.quantity;
+        total += sub;
+        div.innerHTML += \`
+          <div class="invoice-item">
+            \${item.name} (x\${item.quantity}) - RM \${sub.toFixed(2)} 
+            <button class="btn small danger" onclick="remove(\${i})">X</button>
+          </div>\`;
+      });
+      document.getElementById('salesTotal').textContent = total.toFixed(2);
     }
 
-    function clearSale() {
-      selectedSalesItems = [];
-      updateSalesDisplay();
-    }
+    function remove(i) { selectedItems.splice(i, 1); updateDisplay(); }
 
     async function processSale() {
-      if (selectedSalesItems.length === 0) {
-        alert('Please add items to the sale first!');
-        return;
-      }
-
-      try {
-        const salesData = {
-          date: document.getElementById('salesDate').value || new Date().toLocaleString(),
-          customer: document.getElementById('customer').value || 'N/A',
-          items: selectedSalesItems,
-          total: parseFloat(document.getElementById('salesTotal').textContent) || 0
-        };
-        
-        const response = await fetch('/api/sales', {
+      const salesData = {
+        customer: document.getElementById('customer').value || 'Unknown',
+        items: selectedItems,
+        total: parseFloat(document.getElementById('salesTotal').textContent)
+      };
+      
+      const res = await fetch('/api/sales', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ salesData })
+      });
+      
+      if(res.ok) {
+        alert('Sale success');
+        const data = await res.json();
+        // Generate PDF
+        const pdfRes = await fetch('/generate-sales-pdf', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ salesData })
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ salesData: data.salesData })
         });
-
-        const data = await response.json();
-        
-        if (response.ok) {
-          latestSalesData = data.salesData;
-          latestSalesData._id = data.id; // Store the ID for PDF generation
-          
-          alert('Sale processed successfully! Sales Number: ' + data.salesNumber);
-          
-          // Automatically download the PDF after processing
-          await downloadSalesPDF();
-          
-          clearSale(); // Clear items after successful processing
-          loadAvailableItems(); // Refresh available items
-        } else {
-          alert('Failed to process sale: ' + data.error);
-        }
-      } catch (error) {
-        console.error('Sales error:', error);
-        alert('Failed to process sale: ' + error.message);
-      }
-    }
-
-    async function downloadSalesPDF() {
-      if (!latestSalesData) {
-        alert('Please process a sale first!');
-        return;
-      }
-
-      try {
-        // Fetch the latest sales data from the database
-        const response = await fetch('/api/sales/' + latestSalesData._id);
-        if (!response.ok) {
-          throw new Error('Sale not found');
-        }
-        const sale = await response.json();
-        
-        const pdfResponse = await fetch('/generate-sales-pdf', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ salesData: sale })
-        });
-
-        if (pdfResponse.ok) {
-          const blob = await pdfResponse.blob();
+        if(pdfRes.ok) {
+          const blob = await pdfRes.blob();
           const url = window.URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
-          a.download = \`sales-invoice-\${sale.salesNumber || Date.now()}.pdf\`;
+          a.download = 'invoice.pdf';
           a.click();
-          window.URL.revokeObjectURL(url);
-        } else {
-          const errorData = await pdfResponse.json();
-          throw new Error(errorData.error || 'PDF generation failed');
         }
-      } catch (error) {
-        alert('Error generating PDF: ' + error.message);
+        window.location.reload();
+      } else {
+        const err = await res.json();
+        alert('Error: ' + err.error);
       }
     }
 
-    document.addEventListener('DOMContentLoaded', () => {
-      const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
-      if (!user.username) {
-        window.location.href = '/';
-        return;
+    loadAvailable();
+  </script>
+</body>
+</html>`;
+}
+
+function getReferencePage() {
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Reference Report | Secure Inventory</title>
+  <style>${getCSS()}</style>
+</head>
+<body>
+  <div class="container">
+    <div class="topbar">
+      <h2>📋 Reference Report</h2>
+      <button class="btn small" onclick="window.location.href='/?page=dashboard'">← Back</button>
+    </div>
+    <div class="card">
+      <h3>Select Items</h3>
+      <div id="availableItems" class="invoice-items-list"></div>
+    </div>
+    <div class="card">
+      <h3>Report Items</h3>
+      <div id="reportItems"></div>
+      <button class="btn info full" onclick="generateReport()">Generate PDF</button>
+    </div>
+  </div>
+  <script>${getJavaScript()}</script>
+  <script>
+    let selectedItems = [];
+    let availableItems = [];
+
+    async function loadAvailable() {
+      const res = await fetch('/api/inventory');
+      availableItems = await res.json();
+      const container = document.getElementById('availableItems');
+      container.innerHTML = '';
+      availableItems.forEach((item, idx) => {
+        const ref = item.ref_code || 'N/A';
+        container.innerHTML += \`
+          <div class="invoice-item" style="display:flex; justify-content:space-between;">
+            <div><strong>\${item.name}</strong> (\${ref})</div>
+            <button class="btn small" onclick="add(\${idx})">Add</button>
+          </div>\`;
+      });
+    }
+
+    function add(idx) {
+      const item = availableItems[idx];
+      selectedItems.push(item);
+      updateDisplay();
+    }
+
+    function updateDisplay() {
+      const div = document.getElementById('reportItems');
+      div.innerHTML = '';
+      selectedItems.forEach((item, i) => {
+        div.innerHTML += \`<div class="invoice-item">\${item.name} <button class="btn small danger" onclick="remove(\${i})">X</button></div>\`;
+      });
+    }
+
+    function remove(i) { selectedItems.splice(i, 1); updateDisplay(); }
+
+    async function generateReport() {
+      const referenceData = {
+        date: new Date().toLocaleString(),
+        items: selectedItems,
+        total: 0 // Calculation handled in PDF logic usually
+      };
+      
+      // Save report record
+      const saveRes = await fetch('/api/reference-reports/add', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ referenceData })
+      });
+      const saveData = await saveRes.json();
+      referenceData.reportNumber = saveData.reportNumber;
+
+      const res = await fetch('/generate-reference-report-pdf', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ referenceData })
+      });
+      
+      if(res.ok) {
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'reference.pdf';
+        a.click();
       }
-      document.getElementById('username').textContent = user.username;
-      loadAvailableItems();
-    });
+    }
+    loadAvailable();
   </script>
 </body>
 </html>`;
 }
 
 function getStatementPage() {
-  return `<!DOCTYPE html>
+    // Simplified Statement Page
+    return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Statement | Inventory System</title>
+  <title>History | Secure Inventory</title>
   <style>${getCSS()}</style>
 </head>
 <body>
   <div class="container">
     <div class="topbar">
-      <h2>📑 Statements & Reports</h2>
-      <div class="topbar-actions">
-        <span>Welcome, <strong id="username"></strong></span>
-        <button class="btn small ghost" onclick="toggleTheme()">🌓</button>
-        <button class="btn small" onclick="window.location.href='/?page=dashboard'">← Dashboard</button>
-      </div>
+      <h2>📑 History & Reports</h2>
+      <button class="btn small" onclick="window.location.href='/?page=dashboard'">← Back</button>
     </div>
-
     <div class="card">
-      <h3>Generated Reports</h3>
-      <div id="reportsList"></div>
+        <h3>Purchase History</h3>
+        <div id="purchaseList"></div>
     </div>
-
     <div class="card">
-      <h3>Reference Reports</h3>
-      <div id="referenceReportsList"></div>
+        <h3>Sales History</h3>
+        <div id="salesList"></div>
     </div>
-
-    <div class="card">
-      <h3>Purchase History</h3>
-      <div id="purchasesList"></div>
-    </div>
-
-    <div class="card">
-      <h3>Sales History</h3>
-      <div id="salesList"></div>
-    </div>
-
   </div>
-
-  <footer>© 2025 Inventory Management System | Rex_Ho</footer>
-
   <script>${getJavaScript()}</script>
   <script>
-    async function loadReports() {
-      try {
-        const response = await fetch('/api/statements');
-        const statements = await response.json();
-        const container = document.getElementById('reportsList');
-        
-        if (statements.length === 0) {
-          container.innerHTML = '<p>No reports generated yet.</p>';
-        } else {
-          statements.sort((a, b) => new Date(b.date) - new Date(a.date));
-          container.innerHTML = '';
-          
-          statements.forEach((report, index) => {
-            const reportDiv = document.createElement('div');
-            reportDiv.className = 'invoice-item';
-            reportDiv.innerHTML = \`
-              <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div>
-                  <strong>\${report.id || 'N/A'}</strong><br>
-                  <small>Generated: \${report.date || 'N/A'}</small><br>
-                  <small>Items: \${report.items?.length || 0} | \${report.totalInventoryValue || 'RM 0.00'} | \${report.totalPotentialValue || 'RM 0.00'}</small>
-                </div>
-                <div>
-                  <button class="btn small" onclick="downloadReport(\${index})">📥 Download</button>
-                  <button class="btn small danger" onclick="deleteReport('\${report._id}')">🗑️ Delete</button>
-                </div>
-              </div>
-            \`;
-            container.appendChild(reportDiv);
-          });
-        }
-      } catch (error) {
-        console.error('Error loading reports:', error);
-      }
+    async function loadHistory() {
+        const pRes = await fetch('/api/purchases');
+        const purchases = await pRes.json();
+        document.getElementById('purchaseList').innerHTML = purchases.map(p => 
+            \`<div class="invoice-item">\${p.purchaseNumber} - \${p.supplier} (RM \${(p.total||0).toFixed(2)})</div>\`
+        ).join('');
+
+        const sRes = await fetch('/api/sales');
+        const sales = await sRes.json();
+        document.getElementById('salesList').innerHTML = sales.map(s => 
+            \`<div class="invoice-item">\${s.salesNumber} - \${s.customer} (RM \${(s.total||0).toFixed(2)})</div>\`
+        ).join('');
     }
-
-    async function loadReferenceReports() {
-      try {
-        const response = await fetch('/api/reference-reports');
-        const referenceReports = await response.json();
-        const container = document.getElementById('referenceReportsList');
-        
-        if (referenceReports.length === 0) {
-          container.innerHTML = '<p>No reference reports generated yet.</p>';
-        } else {
-          referenceReports.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-          container.innerHTML = '';
-          
-          referenceReports.forEach((report, index) => {
-            const reportDiv = document.createElement('div');
-            reportDiv.className = 'invoice-item';
-            reportDiv.innerHTML = \`
-              <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div>
-                  <strong>\${report.reportNumber || 'N/A'}</strong><br>
-                  <small>Date: \${report.date || 'N/A'}</small><br>
-                  <small>Items: \${report.items?.length || 0} | Total: RM \${(report.total || 0).toFixed(2)}</small>
-                </div>
-                <div>
-                  <button class="btn small" onclick="downloadReferenceReportPDF('\${report._id}')">📥 PDF</button>
-                  <button class="btn small danger" onclick="deleteReferenceReport('\${report._id}')">🗑️ Delete</button>
-                </div>
-              </div>
-            \`;
-            container.appendChild(reportDiv);
-          });
-        }
-      } catch (error) {
-        console.error('Error loading reference reports:', error);
-      }
-    }
-
-    async function loadPurchases() {
-      try {
-        const response = await fetch('/api/purchases');
-        const purchases = await response.json();
-        const container = document.getElementById('purchasesList');
-        
-        if (purchases.length === 0) {
-          container.innerHTML = '<p>No purchase history.</p>';
-        } else {
-          purchases.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-          container.innerHTML = '';
-          
-          purchases.forEach((purchase, index) => {
-            const purchaseDiv = document.createElement('div');
-            purchaseDiv.className = 'invoice-item';
-            purchaseDiv.innerHTML = \`
-              <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div>
-                  <strong>\${purchase.purchaseNumber || 'N/A'}</strong><br>
-                  <small>Date: \${purchase.date || 'N/A'} | Supplier: \${purchase.supplier || 'N/A'}</small><br>
-                  <small>Items: \${purchase.items?.length || 0} | Total: RM \${(purchase.total || 0).toFixed(2)}</small>
-                </div>
-                <div>
-                  <button class="btn small" onclick="downloadPurchasePDF('\${purchase._id}')">📥 PDF</button>
-                  <button class="btn small danger" onclick="deletePurchase('\${purchase._id}')">🗑️ Delete</button>
-                </div>
-              </div>
-            \`;
-            container.appendChild(purchaseDiv);
-          });
-        }
-      } catch (error) {
-        console.error('Error loading purchases:', error);
-      }
-    }
-
-    async function loadSales() {
-      try {
-        const response = await fetch('/api/sales');
-        const sales = await response.json();
-        const container = document.getElementById('salesList');
-        
-        if (sales.length === 0) {
-          container.innerHTML = '<p>No sales history.</p>';
-        } else {
-          sales.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-          container.innerHTML = '';
-          
-          sales.forEach((sale, index) => {
-            const saleDiv = document.createElement('div');
-            saleDiv.className = 'invoice-item';
-            saleDiv.innerHTML = \`
-              <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div>
-                  <strong>\${sale.salesNumber || 'N/A'}</strong><br>
-                  <small>Date: \${sale.date || 'N/A'} | Customer: \${sale.customer || 'N/A'}</small><br>
-                  <small>Items: \${sale.items?.length || 0} | Total: RM \${(sale.total || 0).toFixed(2)}</small>
-                </div>
-                <div>
-                  <button class="btn small" onclick="downloadSalePDF('\${sale._id}')">📥 PDF</button>
-                  <button class="btn small danger" onclick="deleteSale('\${sale._id}')">🗑️ Delete</button>
-                </div>
-              </div>
-            \`;
-            container.appendChild(saleDiv);
-          });
-        }
-      } catch (error) {
-        console.error('Error loading sales:', error);
-      }
-    }
-
-    async function downloadReport(index) {
-      try {
-        const response = await fetch('/api/statements');
-        const statements = await response.json();
-        const report = statements[index];
-        
-        if (report) {
-          const pdfResponse = await fetch('/generate-inventory-report-pdf', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ reportData: report })
-          });
-
-          if (pdfResponse.ok) {
-            const blob = await pdfResponse.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = \`inventory-report-\${report.id || Date.now()}.pdf\`;
-            a.click();
-            window.URL.revokeObjectURL(url);
-          } else {
-            const errorData = await pdfResponse.json();
-            throw new Error(errorData.error || 'PDF generation failed');
-          }
-        }
-      } catch (error) {
-        alert('Error downloading report: ' + error.message);
-      }
-    }
-
-    async function downloadReferenceReportPDF(id) {
-      try {
-        const response = await fetch('/api/reference-reports/' + id);
-        if (!response.ok) {
-          throw new Error('Reference report not found');
-        }
-        const report = await response.json();
-        
-        const pdfResponse = await fetch('/generate-reference-report-pdf', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ referenceData: report })
-        });
-
-        if (pdfResponse.ok) {
-          const blob = await pdfResponse.blob();
-          const url = window.URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = \`reference-report-\${report.reportNumber || Date.now()}.pdf\`;
-          a.click();
-          window.URL.revokeObjectURL(url);
-        } else {
-          const errorData = await pdfResponse.json();
-          throw new Error(errorData.error || 'PDF generation failed');
-        }
-      } catch (error) {
-        alert('Error downloading reference report PDF: ' + error.message);
-      }
-    }
-
-    async function downloadPurchasePDF(id) {
-      try {
-        const response = await fetch('/api/purchases/' + id);
-        if (!response.ok) {
-          throw new Error('Purchase not found');
-        }
-        const purchase = await response.json();
-        
-        const pdfResponse = await fetch('/generate-purchase-pdf', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ purchaseData: purchase })
-        });
-
-        if (pdfResponse.ok) {
-          const blob = await pdfResponse.blob();
-          const url = window.URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = \`purchase-order-\${purchase.purchaseNumber || Date.now()}.pdf\`;
-          a.click();
-          window.URL.revokeObjectURL(url);
-        } else {
-          const errorData = await pdfResponse.json();
-          throw new Error(errorData.error || 'PDF generation failed');
-        }
-      } catch (error) {
-        alert('Error downloading purchase PDF: ' + error.message);
-      }
-    }
-
-    async function downloadSalePDF(id) {
-      try {
-        const response = await fetch('/api/sales/' + id);
-        if (!response.ok) {
-          throw new Error('Sale not found');
-        }
-        const sale = await response.json();
-        
-        const pdfResponse = await fetch('/generate-sales-pdf', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ salesData: sale })
-        });
-
-        if (pdfResponse.ok) {
-          const blob = await pdfResponse.blob();
-          const url = window.URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = \`sales-invoice-\${sale.salesNumber || Date.now()}.pdf\`;
-          a.click();
-          window.URL.revokeObjectURL(url);
-        } else {
-          const errorData = await pdfResponse.json();
-          throw new Error(errorData.error || 'PDF generation failed');
-        }
-      } catch (error) {
-        alert('Error downloading sales PDF: ' + error.message);
-      }
-    }
-
-    async function deleteReport(id) {
-      if (!confirm('Are you sure you want to delete this report?')) return;
-
-      try {
-        const response = await fetch('/api/statements/' + id, { method: 'DELETE' });
-        const data = await response.json();
-        
-        if (response.ok) {
-          loadReports();
-        } else {
-          alert('Failed to delete report: ' + data.error);
-        }
-      } catch (error) {
-        alert('Error deleting report: ' + error.message);
-      }
-    }
-
-    async function deleteReferenceReport(id) {
-      if (!confirm('Are you sure you want to delete this reference report?')) return;
-
-      try {
-        const response = await fetch('/api/reference-reports/' + id, { method: 'DELETE' });
-        const data = await response.json();
-        
-        if (response.ok) {
-          loadReferenceReports();
-        } else {
-          alert('Failed to delete reference report: ' + data.error);
-        }
-      } catch (error) {
-        alert('Error deleting reference report: ' + error.message);
-      }
-    }
-
-    async function deletePurchase(id) {
-      if (!confirm('Are you sure you want to delete this purchase record? This cannot be undone!')) return;
-
-      try {
-        const response = await fetch('/api/purchases/' + id, { method: 'DELETE' });
-        const data = await response.json();
-        
-        if (response.ok) {
-          loadPurchases();
-        } else {
-          alert('Failed to delete purchase: ' + data.error);
-        }
-      } catch (error) {
-        alert('Error deleting purchase: ' + error.message);
-      }
-    }
-
-    async function deleteSale(id) {
-      if (!confirm('Are you sure you want to delete this sale record? This cannot be undone!')) return;
-
-      try {
-        const response = await fetch('/api/sales/' + id, { method: 'DELETE' });
-        const data = await response.json();
-        
-        if (response.ok) {
-          loadSales();
-        } else {
-          alert('Failed to delete sale: ' + data.error);
-        }
-      } catch (error) {
-        alert('Error deleting sale: ' + error.message);
-      }
-    }
-
-    document.addEventListener('DOMContentLoaded', () => {
-      const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
-      if (!user.username) {
-        window.location.href = '/';
-        return;
-      }
-      document.getElementById('username').textContent = user.username;
-      loadReports();
-      loadReferenceReports();
-      loadPurchases();
-      loadSales();
-    });
+    loadHistory();
   </script>
 </body>
 </html>`;
 }
 
 function getSettingsPage() {
-  return `<!DOCTYPE html>
+    return `<!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Account Settings | Inventory System</title>
-  <style>${getCSS()}</style>
-</head>
+<head><title>Settings</title><style>${getCSS()}</style></head>
 <body>
-  <div class="container">
-    <div class="topbar">
-      <h2>⚙️ Account Settings</h2>
-      <div class="topbar-actions">
-        <span>Welcome, <strong id="username"></strong></span>
-        <button class="btn small ghost" onclick="toggleTheme()">🌓</button>
-        <button class="btn small" onclick="window.location.href='/?page=dashboard'">← Dashboard</button>
-      </div>
-    </div>
-
+<div class="container">
+    <div class="topbar"><h2>⚙️ Settings</h2><button class="btn small" onclick="window.location.href='/?page=dashboard'">Back</button></div>
     <div class="card">
-      <h3>Change Password</h3>
-      <form id="changePasswordForm">
-        <div class="input-group">
-          <label>Current Password</label>
-          <input type="password" id="currentPassword" required>
-        </div>
-        <div class="input-group">
-          <label>New Password</label>
-          <input type="password" id="newPassword" required>
-        </div>
-        <div class="input-group">
-          <label>Confirm New Password</label>
-          <input type="password" id="confirmPassword" required>
-        </div>
-        <button type="submit" class="btn full primary">Change Password</button>
-      </form>
+        <h3>Change Password</h3>
+        <form id="pwForm">
+            <input type="password" id="cur" placeholder="Current" required>
+            <input type="password" id="new" placeholder="New" required>
+            <button class="btn primary full">Update</button>
+        </form>
     </div>
-
-    <div class="card danger-zone">
-      <h3 style="color: var(--danger);">⚠️ Danger Zone</h3>
-      <p>Once you delete your account, there is no going back. Please be certain.</p>
-      <p><strong>Note:</strong> Your inventory data will be preserved for other users.</p>
-      
-      <div class="input-group" style="margin-top: 20px;">
-        <label>Security Code (Required for Account Deletion)</label>
-        <input type="password" id="deleteSecurityCode" placeholder="Enter security code to confirm deletion">
-        <small class="hint">Contact administrator for security code</small>
-      </div>
-      
-      <button class="btn danger" onclick="deleteAccount()" style="margin-top: 15px;">Delete My Account</button>
+    <div class="card" style="border-color:red; border-width:1px; border-style:solid;">
+        <h3 style="color:red">Delete Account</h3>
+        <input type="password" id="delCode" placeholder="Security Code">
+        <button class="btn danger full" onclick="delAcc()">DELETE ACCOUNT</button>
     </div>
-  </div>
-
-  <footer>© 2025 Inventory Management System | Rex_Ho</footer>
-
-  <script>${getJavaScript()}</script>
-  <script>
-    document.getElementById('changePasswordForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const currentPassword = document.getElementById('currentPassword').value;
-      const newPassword = document.getElementById('newPassword').value;
-      const confirmPassword = document.getElementById('confirmPassword').value;
-
-      if (newPassword !== confirmPassword) {
-        alert('New passwords do not match!');
-        return;
-      }
-
-      if (newPassword.length < 4) {
-        alert('New password must be at least 4 characters long!');
-        return;
-      }
-
-      const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
-
-      try {
-        const response = await fetch('/api/user/password', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            username: user.username,
-            currentPassword: currentPassword,
-            newPassword: newPassword
-          })
-        });
-
-        const data = await response.json();
-
-        if (response.ok) {
-          alert('Password changed successfully!');
-          document.getElementById('changePasswordForm').reset();
-        } else {
-          alert('Failed to change password: ' + data.error);
-        }
-      } catch (error) {
-        alert('Error changing password: ' + error.message);
-      }
-    });
-
-    async function deleteAccount() {
-      const securityCode = document.getElementById('deleteSecurityCode').value;
-      
-      if (!securityCode) {
-        alert('Please enter the security code to confirm account deletion.');
-        return;
-      }
-
-      const confirmDelete = confirm('ARE YOU SURE YOU WANT TO DELETE YOUR ACCOUNT?\\n\\n⚠️  This action cannot be undone!\\n\\nYour personal data will be deleted but inventory data will be preserved for other users.');
-      
-      if (confirmDelete) {
-        const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
-
-        try {
-          const response = await fetch('/api/user', {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-              username: user.username,
-              securityCode: securityCode
+</div>
+<script>${getJavaScript()}</script>
+<script>
+    document.getElementById('pwForm').addEventListener('submit', async(e)=>{
+        e.preventDefault();
+        const user = JSON.parse(localStorage.getItem('currentUser'));
+        await fetch('/api/user/password', {
+            method:'PUT',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({
+                username: user.username,
+                currentPassword: document.getElementById('cur').value,
+                newPassword: document.getElementById('new').value
             })
-          });
-
-          const data = await response.json();
-
-          if (response.ok) {
-            localStorage.removeItem('currentUser');
-            alert('Account deleted successfully! Inventory data preserved.');
-            window.location.href = '/';
-          } else {
-            alert('Failed to delete account: ' + data.error);
-          }
-        } catch (error) {
-          alert('Error deleting account: ' + error.message);
-        }
-      }
-    }
-
-    document.addEventListener('DOMContentLoaded', () => {
-      const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
-      if (!user.username) {
-        window.location.href = '/';
-        return;
-      }
-      document.getElementById('username').textContent = user.username;
+        });
+        alert('Done');
     });
-  </script>
+    async function delAcc(){
+        if(!confirm('Delete?')) return;
+        const user = JSON.parse(localStorage.getItem('currentUser'));
+        const res = await fetch('/api/user', {
+            method:'DELETE',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({username:user.username, securityCode: document.getElementById('delCode').value})
+        });
+        if(res.ok) { window.location.href='/'; } else { alert('Failed'); }
+    }
+</script>
 </body>
 </html>`;
 }
 
 function getCSS() {
   return `
-    :root {
-      --accent: #3b82f6;
-      --primary: #3b82f6;
-      --success: #10b981;
-      --danger: #ef4444;
-      --warning: #f59e0b;
-      --info: #06b6d4;
-      --radius: 12px;
-      --transition: 0.25s;
-      --shadow: 0 4px 15px rgba(0,0,0,0.2);
-      --shadow-light: 0 2px 8px rgba(0,0,0,0.1);
-    }
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: "Poppins", sans-serif;
-      background: #0f172a;
-      color: #f1f5f9;
-      margin: 0;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-    }
-    body.light {
-      background: #f8fafc;
-      color: #1e293b;
-    }
-    .container { width: 90%; max-width: 1200px; margin: 30px auto; }
-    .card {
-      background: #1e293b;
-      border-radius: var(--radius);
-      padding: 20px;
-      box-shadow: var(--shadow);
-      margin-top: 20px;
-    }
-    body.light .card { background: #fff; }
-    .topbar {
-      background: var(--accent);
-      color: #fff;
-      padding: 15px 20px;
-      border-radius: var(--radius);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 10px;
-    }
-    .topbar-actions {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      flex-wrap: wrap;
-    }
-    .welcome-text {
-      margin-right: 10px;
-    }
-    .card-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 15px;
-      flex-wrap: wrap;
-      gap: 10px;
-    }
-    .card-header h3 { margin: 0; }
-    .card-header > div { display: flex; gap: 10px; flex-wrap: wrap; }
-    .form-row { display: flex; gap: 15px; margin-bottom: 15px; flex-wrap: wrap; }
-    .form-row label { flex: 1; min-width: 200px; }
-    .btn {
-      background: var(--accent); color: #fff; border: none; border-radius: var(--radius);
-      padding: 8px 14px; cursor: pointer; text-decoration: none; font-weight: 500;
-      transition: var(--transition); display: inline-block; text-align: center;
-    }
-    .btn:hover { transform: scale(1.05); }
+    :root { --primary: #3b82f6; --bg: #0f172a; --card: #1e293b; --text: #f1f5f9; }
+    body { font-family: sans-serif; background: var(--bg); color: var(--text); margin: 0; }
+    body.light { --bg: #f8fafc; --card: #ffffff; --text: #1e293b; }
+    .container { max-width: 1000px; margin: 20px auto; padding: 10px; }
+    .card { background: var(--card); padding: 20px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+    .topbar { display: flex; justify-content: space-between; align-items: center; background: var(--primary); padding: 15px; border-radius: 12px; margin-bottom: 20px; color: white; }
+    .btn { background: var(--primary); border: none; padding: 10px 15px; color: white; border-radius: 8px; cursor: pointer; }
+    .btn.danger { background: #ef4444; }
+    .btn.success { background: #10b981; }
+    .btn.info { background: #06b6d4; }
+    .btn.small { padding: 5px 10px; font-size: 0.8em; }
     .btn.full { width: 100%; margin-top: 10px; }
-    .btn.primary { background: var(--primary); }
-    .btn.success { background: var(--success); }
-    .btn.danger { background: var(--danger); }
-    .btn.warning { background: var(--warning); }
-    .btn.info { background: var(--info); }
-    .btn.ghost { background: transparent; border: 1px solid #fff; }
-    body.light .btn.ghost { border-color: #1e293b; color: #1e293b; }
-    .btn.small { padding: 5px 10px; font-size: 0.85em; }
-    input, select, textarea {
-      width: 100%; padding: 10px; border-radius: var(--radius);
-      border: 1px solid #475569; margin-top: 5px;
-      background: #0f172a; color: #fff;
-    }
-    body.light input, body.light select, body.light textarea {
-      background: #fff; color: #000; border-color: #cbd5e1;
-    }
-    .table {
-      width: 100%; border-collapse: collapse; margin-top: 15px;
-    }
-    .table th, .table td { padding: 12px; border-bottom: 1px solid #334155; text-align: left; }
-    .table th { background: var(--accent); color: #fff; }
-    .table tr:nth-child(even) { background: #1e293b; }
-    body.light .table tr:nth-child(even) { background: #f8fafc; }
-    .subtotal-row { background: #334155 !important; font-weight: bold; }
-    body.light .subtotal-row { background: #e2e8f0 !important; }
-    
-    /* Auth Styles with Background Image */
-    .auth-container {
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-      background: linear-gradient(rgba(15, 23, 42, 0.9), rgba(15, 23, 42, 0.9)),
-                  url('https://images.pexels.com/photos/1103970/pexels-photo-1103970.jpeg') center/cover fixed;
-      position: relative;
-    }
-    body.light .auth-container {
-      background: linear-gradient(rgba(248, 250, 252, 0.9), rgba(248, 250, 252, 0.9)),
-                  url('https://images.pexels.com/photos/1103970/pexels-photo-1103970.jpeg') center/cover fixed;
-    }
-    .auth-overlay {
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(6, 182, 212, 0.1));
-      z-index: 1;
-    }
-    .auth-content {
-      position: relative;
-      z-index: 2;
-      width: 100%;
-      max-width: 500px;
-    }
-    .auth-header {
-      text-align: center;
-      margin-bottom: 40px;
-    }
-    .logo {
-      font-size: 4rem;
-      margin-bottom: 20px;
-      text-shadow: 0 4px 8px rgba(0,0,0,0.3);
-    }
-    .main-title {
-      font-size: 3rem;
-      font-weight: 700;
-      background: linear-gradient(135deg, var(--primary), var(--info));
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-      margin-bottom: 10px;
-      text-shadow: 0 2px 4px rgba(0,0,0,0.2);
-    }
-    .subtitle {
-      color: #94a3b8;
-      font-size: 1.2rem;
-      margin-top: 10px;
-    }
-    body.light .subtitle {
-      color: #64748b;
-    }
-    .auth-card {
-      background: rgba(30, 41, 59, 0.95);
-      border-radius: var(--radius);
-      padding: 40px;
-      box-shadow: var(--shadow);
-      width: 100%;
-      backdrop-filter: blur(10px);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-    }
-    body.light .auth-card {
-      background: rgba(255, 255, 255, 0.95);
-      border: 1px solid rgba(0, 0, 0, 0.1);
-    }
-    .input-group {
-      margin-bottom: 20px;
-    }
-    .input-group label {
-      display: block;
-      margin-bottom: 8px;
-      font-weight: 500;
-    }
-    .auth-links {
-      text-align: center;
-      margin-top: 20px;
-    }
-    .link {
-      color: var(--primary);
-      text-decoration: none;
-      font-weight: 500;
-    }
-    .link:hover {
-      text-decoration: underline;
-    }
-    .hint {
-      color: #94a3b8;
-      font-size: 0.8em;
-      margin-top: 5px;
-      display: block;
-    }
-    body.light .hint {
-      color: #64748b;
-    }
-    
-    /* Login History Styles */
-    .login-history-container {
-      max-height: 400px;
-      overflow-y: auto;
-    }
-    .login-history-item {
-      background: #1e293b;
-      border-radius: var(--radius);
-      padding: 15px;
-      margin-bottom: 10px;
-      border-left: 4px solid var(--success);
-    }
-    body.light .login-history-item {
-      background: #f8fafc;
-    }
-    .login-history-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 10px;
-    }
-    .user-info {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-    .user-avatar {
-      font-size: 1.5rem;
-    }
-    .username {
-      color: var(--primary);
-    }
-    .username.current-user {
-      color: var(--success);
-      font-weight: bold;
-    }
-    .login-time {
-      font-size: 0.8em;
-      color: #94a3b8;
-    }
-    .login-status {
-      padding: 4px 8px;
-      border-radius: 20px;
-      font-size: 0.8em;
-      font-weight: 500;
-    }
-    .login-status.success {
-      background: var(--success);
-      color: white;
-    }
-    .login-details {
-      display: flex;
-      flex-direction: column;
-      gap: 5px;
-    }
-    .detail-item {
-      display: flex;
-      justify-content: space-between;
-      font-size: 0.9em;
-    }
-    .detail-label {
-      color: #94a3b8;
-    }
-    .detail-value {
-      color: #f1f5f9;
-      font-weight: 500;
-    }
-    body.light .detail-value {
-      color: #1e293b;
-    }
-    .empty-state, .loading, .error-state {
-      text-align: center;
-      padding: 40px;
-      color: #94a3b8;
-    }
-    
-    /* Value Summary Styles */
-    .value-summary {
-      display: flex;
-      gap: 20px;
-      flex-wrap: wrap;
-    }
-    .value-item {
-      flex: 1;
-      min-width: 200px;
-      background: var(--primary);
-      color: white;
-      padding: 20px;
-      border-radius: var(--radius);
-      text-align: center;
-      box-shadow: var(--shadow);
-    }
-    .value-item.primary { background: var(--primary); }
-    .value-item.success { background: var(--success); }
-    .value-item.info { background: var(--info); }
-    .value-item h4 {
-      margin: 0 0 10px 0;
-      font-size: 1rem;
-      opacity: 0.9;
-    }
-    .value-item p {
-      margin: 0;
-      font-size: 1.5rem;
-      font-weight: bold;
-    }
-    
-    /* Table Enhancements */
-    .no-data {
-      text-align: center;
-      color: #94a3b8;
-      padding: 40px !important;
-    }
-    .category-tag {
-      background: var(--info);
-      color: white;
-      padding: 4px 8px;
-      border-radius: 20px;
-      font-size: 0.8em;
-    }
-    .quantity-badge {
-      background: var(--warning);
-      color: white;
-      padding: 4px 8px;
-      border-radius: 20px;
-      font-size: 0.8em;
-    }
-    .value-text {
-      color: var(--success);
-    }
-    .potential-text {
-      color: var(--info);
-    }
-    .date-text {
-      color: #94a3b8;
-      font-size: 0.9em;
-    }
-    .action-buttons {
-      display: flex;
-      gap: 5px;
-    }
-    
-    /* Action Buttons */
-    .action-buttons {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-    }
-    
-    /* Search Section Styles */
-    .search-section {
-      background: #1e293b;
-      padding: 15px;
-      border-radius: var(--radius);
-      margin-bottom: 20px;
-      border-left: 4px solid var(--accent);
-    }
-    body.light .search-section {
-      background: #f1f5f9;
-    }
-    
-    /* Invoice Items */
-    .invoice-item {
-      background: #1e293b;
-      padding: 15px;
-      border-radius: var(--radius);
-      margin-bottom: 10px;
-      border-left: 4px solid var(--accent);
-    }
-    body.light .invoice-item {
-      background: #f1f5f9;
-    }
-    .invoice-items-list { max-height: 400px; overflow-y: auto; }
-    .invoice-total {
-      margin-top: 20px; padding: 15px; background: #334155;
-      border-radius: var(--radius); text-align: right;
-    }
-    body.light .invoice-total { background: #e2e8f0; }
-    
-    /* Danger Zone */
-    .danger-zone { 
-      border-left: 4px solid var(--danger);
-      background: rgba(239, 68, 68, 0.1);
-    }
-    
-    /* Controls */
-    .controls { display: flex; gap: 10px; margin-top: 15px; flex-wrap: wrap; }
-    
-    /* Footer */
-    footer { text-align: center; padding: 20px; margin-top: auto; color: #94a3b8; }
-    
-    /* Modal Styles */
-    .modal {
-      display: none;
-      position: fixed;
-      z-index: 1000;
-      left: 0;
-      top: 0;
-      width: 100%;
-      height: 100%;
-      background-color: rgba(0,0,0,0.5);
-    }
-    .modal-content {
-      background: #1e293b;
-      margin: 5% auto;
-      padding: 0;
-      border-radius: var(--radius);
-      width: 90%;
-      max-width: 600px;
-      box-shadow: var(--shadow);
-    }
-    body.light .modal-content { background: #fff; }
-    .modal-header {
-      background: var(--accent);
-      color: white;
-      padding: 15px 20px;
-      border-radius: var(--radius) var(--radius) 0 0;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    .modal-header h3 { margin: 0; }
-    .close {
-      color: white;
-      font-size: 28px;
-      font-weight: bold;
-      cursor: pointer;
-    }
-    .close:hover { color: #f1f5f9; }
-    
-    @media (max-width: 768px) {
-      .form-row { flex-direction: column; }
-      .card-header { flex-direction: column; align-items: flex-start; }
-      .card-header > div { width: 100%; justify-content: flex-start; }
-      .table { font-size: 0.9em; }
-      .table th, .table td { padding: 8px 5px; }
-      .topbar { flex-direction: column; align-items: flex-start; gap: 10px; }
-      .topbar-actions { width: 100%; justify-content: flex-start; }
-      .auth-card { padding: 20px; }
-      .main-title { font-size: 2rem; }
-      .modal-content { width: 95%; margin: 10% auto; }
-      .search-section .form-row { flex-direction: column; }
-      .value-summary { flex-direction: column; }
-      .value-item { min-width: 100%; }
-      .action-buttons { flex-direction: column; }
-      .login-history-header { flex-direction: column; align-items: flex-start; gap: 10px; }
-    }
+    input { width: 100%; padding: 10px; margin: 5px 0; background: rgba(0,0,0,0.2); border: 1px solid #444; color: white; border-radius: 6px; box-sizing: border-box;}
+    body.light input { background: #f1f5f9; color: black; border-color: #ccc; }
+    .form-row { display: flex; gap: 10px; margin-bottom: 10px; }
+    .form-row label { flex: 1; }
+    .table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    .table th, .table td { padding: 10px; text-align: left; border-bottom: 1px solid #333; }
+    .table th { color: var(--primary); }
+    .auth-container { height: 100vh; display: flex; justify-content: center; align-items: center; background: #000; }
+    .auth-card { width: 350px; background: #1a1a1a; padding: 30px; border-radius: 15px; text-align: center; }
+    .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); }
+    .modal-content { background: var(--card); width: 90%; max-width: 500px; margin: 100px auto; padding: 20px; border-radius: 10px; }
+    .invoice-item { background: rgba(255,255,255,0.05); padding: 10px; margin-bottom: 5px; border-radius: 5px; }
+    .login-history-item { border-left: 3px solid #10b981; padding-left: 10px; margin-bottom: 10px; }
   `;
 }
 
 function getJavaScript() {
   return `
-    function getCurrentUser() {
-      try {
-        return JSON.parse(localStorage.getItem('currentUser') || '{}');
-      } catch (error) {
-        return {};
-      }
-    }
-
-    function requireLogin() {
-      const user = getCurrentUser();
-      if (!user.username) {
-        window.location.href = '/';
-        return false;
-      }
-      return true;
-    }
-
-    function logout() {
-      localStorage.removeItem('currentUser');
-      window.location.href = '/';
-    }
-
     function toggleTheme() {
-      document.body.classList.toggle('light');
-      localStorage.setItem('theme', document.body.classList.contains('light') ? 'light' : 'dark');
+        document.body.classList.toggle('light');
     }
-
-    // Load saved theme
-    document.addEventListener('DOMContentLoaded', () => {
-      const savedTheme = localStorage.getItem('theme');
-      if (savedTheme === 'light') {
-        document.body.classList.add('light');
-      }
-      
-      const user = getCurrentUser();
-      const usernameElement = document.getElementById('username');
-      if (usernameElement && user.username) {
-        usernameElement.textContent = user.username;
-      }
-    });
+    function logout() {
+        localStorage.removeItem('currentUser');
+        window.location.href = '/';
+    }
   `;
 }
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log('🚀 Complete single-file server running on port ' + PORT);
-  console.log('📊 MongoDB: ' + MONGODB_URI);
-  console.log('🔐 Security Code: ' + VALID_SECURITY_CODE);
-  console.log('🌐 Main URL: http://localhost:' + PORT + '/');
-  console.log('✅ ALL FEATURES INCLUDED:');
-  console.log('   ✅ User Authentication (Login/Register)');
-  console.log('   ✅ Complete Inventory Management with Edit/Delete');
-  console.log('   ✅ Search & Date Range Filter for Inventory');
-  console.log('   ✅ Purchase (Stock In) with Search & Automatic PDF Download');
-  console.log('   ✅ Sales (Stock Out) with Search & Automatic PDF Download');
-  console.log('   ✅ Reference Report Generation with PDF (Updated from Invoice)');
-  console.log('   ✅ Statements & Reports with History');
-  console.log('   ✅ Account Settings & Password Management');
-  console.log('   ✅ Dark/Light Theme Toggle');
-  console.log('   ✅ Responsive Design for Mobile');
-  console.log('   ✅ Enhanced Login History with All Users');
-  console.log('   ✅ Professional PDF Layout Design (Single Page)');
-  console.log('   ✅ Security Code for Account Deletion');
-  console.log('   ✅ Inventory Value Summary');
-  console.log('   ✅ Date Range Specific Inventory Reports');
-  console.log('   ✅ Preserved Inventory Data on Account Deletion');
-  console.log('   ✅ Complete Multi-User System');
-  console.log('   ✅ Enterprise-Level Inventory Management');
-  console.log('   ✅ Sequential Numbering System: REF-0000000000001, PUR-0000000000001, SAL-0000000000001');
-  console.log('   ✅ FIXED: Cannot read properties of undefined (reading "toString") errors');
-  console.log('   ✅ FIXED: PDF generation errors with proper error handling');
-  console.log('   ✅ FIXED: Purchase and Sales processing errors');
-  console.log('   ✅ NEW: Delete buttons for purchase and sale history');
-  console.log('   ✅ NEW: Fixed PDF download for latest purchase/sale in Statements');
-  console.log('   ✅ NEW: Automatic PDF download after purchase/sale processing');
-  console.log('   ✅ FIXED: "Purchase not found" error in PDF download');
-  console.log('   ✅ FIXED: JSON parsing error for reference report PDF');
-  console.log('   ✅ REMOVED: PDF download buttons from Purchase & Sales pages (Automatic download still works)');
-  console.log('   ✅ NEW: Professional gray/white wallpaper background on login page');
+  console.log('🚀 Secure Server running on port ' + PORT);
+  console.log('✅ REFACTORED SCHEMA APPLIED (ref_code, qty_on_hand, buy_price, sell_price)');
 });
