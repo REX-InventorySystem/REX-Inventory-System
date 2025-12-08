@@ -1305,13 +1305,10 @@ function getLoginPage() {
   <div class="auth-container">
     <div class="auth-header">
       <div class="logo">📦</div>
-      <h1 class="main-title">INVENTORY SYSTEM</h1>
-      <h2 class="sub-title">WITH REFERENCE SYSTEM</h2>
-      <p class="tagline">Complete Inventory Management Solution</p>
+      <h1 class="main-title">INVENTORY WITH INVOICE SYSTEM</h1>
     </div>
     
     <div class="auth-card">
-      <h3>Login to Your Account</h3>
       <form id="loginForm">
         <div class="input-group">
           <label>Username</label>
@@ -1326,25 +1323,6 @@ function getLoginPage() {
           <p>No account? <a href="/?page=register" class="link">Register here</a></p>
         </div>
       </form>
-    </div>
-    
-    <div class="auth-features">
-      <div class="feature">
-        <span class="feature-icon">📊</span>
-        <span>Inventory Management</span>
-      </div>
-      <div class="feature">
-        <span class="feature-icon">📋</span>
-        <span>Reference Reports</span>
-      </div>
-      <div class="feature">
-        <span class="feature-icon">📈</span>
-        <span>Sales & Purchase Tracking</span>
-      </div>
-      <div class="feature">
-        <span class="feature-icon">📋</span>
-        <span>Reports & Analytics</span>
-      </div>
     </div>
   </div>
 
@@ -1397,13 +1375,10 @@ function getRegisterPage() {
   <div class="auth-container">
     <div class="auth-header">
       <div class="logo">📦</div>
-      <h1 class="main-title">INVENTORY SYSTEM</h1>
-      <h2 class="sub-title">WITH REFERENCE SYSTEM</h2>
-      <p class="tagline">Complete Inventory Management Solution</p>
+      <h1 class="main-title">INVENTORY WITH INVOICE SYSTEM</h1>
     </div>
     
     <div class="auth-card">
-      <h3>Create New Account</h3>
       <form id="registerForm">
         <div class="input-group">
           <label>Username</label>
@@ -1423,25 +1398,6 @@ function getRegisterPage() {
           <p>Already have an account? <a href="/" class="link">Login here</a></p>
         </div>
       </form>
-    </div>
-    
-    <div class="auth-features">
-      <div class="feature">
-        <span class="feature-icon">🔒</span>
-        <span>Secure Authentication</span>
-      </div>
-      <div class="feature">
-        <span class="feature-icon">👥</span>
-        <span>Multi-User Support</span>
-      </div>
-      <div class="feature">
-        <span class="feature-icon">📱</span>
-        <span>Responsive Design</span>
-      </div>
-      <div class="feature">
-        <span class="feature-icon">🆓</span>
-        <span>Free to Use</span>
-      </div>
     </div>
   </div>
 
@@ -3412,19 +3368,6 @@ function getCSS() {
       background-clip: text;
       margin-bottom: 10px;
     }
-    .sub-title {
-      font-size: 1.5rem;
-      font-weight: 500;
-      color: var(--info);
-      margin-bottom: 10px;
-    }
-    .tagline {
-      color: #94a3b8;
-      font-size: 1.1rem;
-    }
-    body.light .tagline {
-      color: #64748b;
-    }
     .auth-card {
       background: #1e293b;
       border-radius: var(--radius);
@@ -3436,11 +3379,6 @@ function getCSS() {
     }
     body.light .auth-card {
       background: #fff;
-    }
-    .auth-card h3 {
-      text-align: center;
-      margin-bottom: 30px;
-      font-size: 1.5rem;
     }
     .input-group {
       margin-bottom: 20px;
@@ -3460,29 +3398,6 @@ function getCSS() {
     }
     .link:hover {
       text-decoration: underline;
-    }
-    .auth-features {
-      display: flex;
-      gap: 20px;
-      flex-wrap: wrap;
-      justify-content: center;
-    }
-    .feature {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 10px 20px;
-      background: #1e293b;
-      border-radius: var(--radius);
-      color: #f1f5f9;
-    }
-    body.light .feature {
-      background: #fff;
-      color: #1e293b;
-      box-shadow: var(--shadow-light);
-    }
-    .feature-icon {
-      font-size: 1.2rem;
     }
     .hint {
       color: #94a3b8;
@@ -3730,8 +3645,6 @@ function getCSS() {
       .topbar-actions { width: 100%; justify-content: flex-start; }
       .auth-card { padding: 20px; }
       .main-title { font-size: 2rem; }
-      .sub-title { font-size: 1.2rem; }
-      .auth-features { flex-direction: column; }
       .modal-content { width: 95%; margin: 10% auto; }
       .search-section .form-row { flex-direction: column; }
       .value-summary { flex-direction: column; }
