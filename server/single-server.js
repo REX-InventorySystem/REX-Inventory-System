@@ -1,9 +1,6 @@
 const express = require('express');
 const { MongoClient, ObjectId } = require('mongodb');
 const PDFDocument = require('pdfkit');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -14,42 +11,9 @@ const VALID_SECURITY_CODE = "INV2025";
 
 let db;
 
-// Create uploads directory if it doesn't exist
-const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-
-// Configure multer for file upload
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, uploadsDir)
-  },
-  filename: function (req, file, cb) {
-    // Generate unique filename
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, 'background-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
-const upload = multer({ 
-  storage: storage,
-  fileFilter: function (req, file, cb) {
-    // Accept images only
-    if (!file.originalname.match(/\.(jpg|jpeg|png|gif|webp)$/)) {
-      return cb(new Error('Only image files are allowed!'), false);
-    }
-    cb(null, true);
-  },
-  limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB limit
-  }
-});
-
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use('/uploads', express.static(uploadsDir)); // Serve uploaded files
 
 // Serve COMPLETE application from single endpoint
 app.get('/', (req, res) => {
@@ -95,167 +59,6 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Background Image APIs
-app.get('/api/background-images', async (req, res) => {
-  try {
-    const user = JSON.parse(req.headers.user || '{}');
-    if (!user.username) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    const backgroundImages = await db.collection('background_images').find({}).sort({ createdAt: -1 }).toArray();
-    res.json(backgroundImages);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/background-images/upload', upload.single('backgroundImage'), async (req, res) => {
-  try {
-    const user = JSON.parse(req.headers.user || '{}');
-    if (!user.username) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
-    }
-
-    const backgroundImage = {
-      filename: req.file.filename,
-      originalName: req.file.originalname,
-      path: `/uploads/${req.file.filename}`,
-      size: req.file.size,
-      mimetype: req.file.mimetype,
-      uploadedBy: user.username,
-      createdAt: new Date(),
-      isActive: true
-    };
-
-    // Deactivate all other images
-    await db.collection('background_images').updateMany(
-      {},
-      { $set: { isActive: false } }
-    );
-
-    // Insert new active image
-    const result = await db.collection('background_images').insertOne(backgroundImage);
-
-    res.json({ 
-      success: true, 
-      message: 'Background image uploaded successfully',
-      image: {
-        ...backgroundImage,
-        _id: result.insertedId.toString()
-      }
-    });
-  } catch (error) {
-    console.error('Upload error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.put('/api/background-images/:id/activate', async (req, res) => {
-  try {
-    const user = JSON.parse(req.headers.user || '{}');
-    if (!user.username) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    const { id } = req.params;
-
-    // Deactivate all images
-    await db.collection('background_images').updateMany(
-      {},
-      { $set: { isActive: false } }
-    );
-
-    // Activate the selected image
-    const result = await db.collection('background_images').updateOne(
-      { _id: new ObjectId(id) },
-      { $set: { isActive: true, activatedAt: new Date() } }
-    );
-
-    if (result.matchedCount === 0) {
-      return res.status(404).json({ error: 'Image not found' });
-    }
-
-    res.json({ success: true, message: 'Background image activated successfully' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.delete('/api/background-images/:id', async (req, res) => {
-  try {
-    const user = JSON.parse(req.headers.user || '{}');
-    if (!user.username) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    const { id } = req.params;
-
-    // Get the image to delete
-    const image = await db.collection('background_images').findOne({ _id: new ObjectId(id) });
-    
-    if (!image) {
-      return res.status(404).json({ error: 'Image not found' });
-    }
-
-    // Delete the image file from disk
-    const filePath = path.join(uploadsDir, image.filename);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-    }
-
-    // Delete from database
-    const result = await db.collection('background_images').deleteOne({ _id: new ObjectId(id) });
-
-    if (result.deletedCount === 0) {
-      return res.status(404).json({ error: 'Image not found' });
-    }
-
-    // If we deleted the active image, activate the most recent one
-    if (image.isActive) {
-      const mostRecentImage = await db.collection('background_images')
-        .findOne({}, { sort: { createdAt: -1 } });
-      
-      if (mostRecentImage) {
-        await db.collection('background_images').updateOne(
-          { _id: mostRecentImage._id },
-          { $set: { isActive: true } }
-        );
-      }
-    }
-
-    res.json({ success: true, message: 'Background image deleted successfully' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/background-images/active', async (req, res) => {
-  try {
-    const activeImage = await db.collection('background_images').findOne({ isActive: true });
-    
-    if (!activeImage) {
-      // Return default background if no active image
-      return res.json({ 
-        default: true,
-        backgroundStyle: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)'
-      });
-    }
-
-    res.json({
-      default: false,
-      ...activeImage,
-      url: `http://${req.headers.host}${activeImage.path}`
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // Counter for sequential numbers
 async function getNextSequence(collectionName) {
   try {
@@ -287,7 +90,7 @@ async function connectDB() {
     console.log('✅ Connected to MongoDB');
     
     // Create collections if they don't exist
-    const collections = ['users', 'inventory', 'statements', 'reference_reports', 'purchases', 'sales', 'login_history', 'counters', 'background_images'];
+    const collections = ['users', 'inventory', 'statements', 'reference_reports', 'purchases', 'sales', 'login_history', 'counters'];
     for (const collectionName of collections) {
       const collection = db.collection(collectionName);
       if (collectionName === 'users') {
@@ -1554,31 +1357,6 @@ function getLoginPage() {
     if (currentUser && currentUser.username) {
       window.location.href = '/?page=dashboard';
     }
-
-    // Load background image
-    async function loadBackgroundImage() {
-      try {
-        const response = await fetch('/api/background-images/active');
-        const data = await response.json();
-        
-        if (data.default) {
-          // Use default gradient
-          document.querySelector('.auth-container').style.background = data.backgroundStyle;
-        } else {
-          // Use uploaded image
-          document.querySelector('.auth-container').style.background = \`url('\${data.url}') no-repeat center center fixed\`;
-          document.querySelector('.auth-container').style.backgroundSize = 'cover';
-          // Add overlay for better text readability
-          document.querySelector('.auth-container').style.position = 'relative';
-          document.querySelector('.auth-container').style.setProperty('--overlay', 'rgba(15, 23, 42, 0.7)');
-        }
-      } catch (error) {
-        console.error('Error loading background:', error);
-      }
-    }
-
-    // Load background on page load
-    window.addEventListener('load', loadBackgroundImage);
   </script>
 </body>
 </html>`;
@@ -1650,27 +1428,6 @@ function getRegisterPage() {
         alert('Registration error: ' + error.message);
       }
     });
-
-    // Load background image
-    async function loadBackgroundImage() {
-      try {
-        const response = await fetch('/api/background-images/active');
-        const data = await response.json();
-        
-        if (data.default) {
-          document.querySelector('.auth-container').style.background = data.backgroundStyle;
-        } else {
-          document.querySelector('.auth-container').style.background = \`url('\${data.url}') no-repeat center center fixed\`;
-          document.querySelector('.auth-container').style.backgroundSize = 'cover';
-          document.querySelector('.auth-container').style.position = 'relative';
-          document.querySelector('.auth-container').style.setProperty('--overlay', 'rgba(15, 23, 42, 0.7)');
-        }
-      } catch (error) {
-        console.error('Error loading background:', error);
-      }
-    }
-
-    window.addEventListener('load', loadBackgroundImage);
   </script>
 </body>
 </html>`;
@@ -1694,28 +1451,6 @@ function getDashboardPage() {
         <button class="btn small ghost" onclick="toggleTheme()">🌓</button>
         <a href="/?page=settings" class="btn small">⚙️ Settings</a>
         <button class="btn small danger" onclick="logout()">Logout</button>
-      </div>
-    </div>
-
-    <!-- Background Image Management Section -->
-    <div class="card">
-      <div class="card-header">
-        <h3>🎨 Login Page Background Images</h3>
-      </div>
-      <div id="backgroundImagesContainer">
-        <div class="loading">Loading background images...</div>
-      </div>
-      <div class="background-upload-section">
-        <h4>Upload New Background Image</h4>
-        <form id="backgroundUploadForm">
-          <div class="form-row">
-            <label style="flex: 1;">
-              Select Image (JPG, PNG, GIF, WebP - Max 5MB)
-              <input type="file" id="backgroundImage" accept=".jpg,.jpeg,.png,.gif,.webp" required>
-            </label>
-          </div>
-          <button type="submit" class="btn primary">📤 Upload & Set as Active</button>
-        </form>
       </div>
     </div>
 
@@ -1862,153 +1597,6 @@ function getDashboardPage() {
     let inventoryItems = [];
     let currentPurchaseId = null;
     let currentSalesId = null;
-
-    // Background Image Management
-    async function loadBackgroundImages() {
-      try {
-        const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
-        const response = await fetch('/api/background-images', {
-          headers: {
-            'Content-Type': 'application/json',
-            'user': JSON.stringify(user)
-          }
-        });
-        
-        const images = await response.json();
-        const container = document.getElementById('backgroundImagesContainer');
-        
-        if (images.length === 0) {
-          container.innerHTML = '<p>No background images uploaded yet. Upload your first image!</p>';
-        } else {
-          container.innerHTML = '';
-          images.forEach((image, index) => {
-            const imageDiv = document.createElement('div');
-            imageDiv.className = 'background-image-item';
-            const isActive = image.isActive ? 'active' : '';
-            const activeBadge = image.isActive ? '<span class="active-badge">✅ Active</span>' : '';
-            
-            imageDiv.innerHTML = \`
-              <div class="background-image-preview" style="background-image: url('\${image.path}')"></div>
-              <div class="background-image-info">
-                <div class="image-header">
-                  <strong>\${image.originalName}</strong>
-                  \${activeBadge}
-                </div>
-                <div class="image-details">
-                  <small>Size: \${formatFileSize(image.size)}</small>
-                  <small>Uploaded: \${new Date(image.createdAt).toLocaleDateString()}</small>
-                  <small>By: \${image.uploadedBy}</small>
-                </div>
-                <div class="image-actions">
-                  \${!image.isActive ? \`
-                    <button class="btn small primary" onclick="activateBackgroundImage('\${image._id}')">Set as Active</button>
-                  \` : ''}
-                  <button class="btn small danger" onclick="deleteBackgroundImage('\${image._id}')">Delete</button>
-                </div>
-              </div>
-            \`;
-            container.appendChild(imageDiv);
-          });
-        }
-      } catch (error) {
-        console.error('Error loading background images:', error);
-        document.getElementById('backgroundImagesContainer').innerHTML = '<div class="error-state">Failed to load background images.</div>';
-      }
-    }
-
-    function formatFileSize(bytes) {
-      if (bytes === 0) return '0 Bytes';
-      const k = 1024;
-      const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-      const i = Math.floor(Math.log(bytes) / Math.log(k));
-      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-    }
-
-    async function activateBackgroundImage(imageId) {
-      try {
-        const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
-        const response = await fetch(\`/api/background-images/\${imageId}/activate\`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-            'user': JSON.stringify(user)
-          }
-        });
-
-        const data = await response.json();
-        
-        if (response.ok) {
-          alert('Background image activated successfully!');
-          loadBackgroundImages();
-        } else {
-          alert('Failed to activate image: ' + data.error);
-        }
-      } catch (error) {
-        alert('Error activating image: ' + error.message);
-      }
-    }
-
-    async function deleteBackgroundImage(imageId) {
-      if (!confirm('Are you sure you want to delete this background image?')) return;
-      
-      try {
-        const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
-        const response = await fetch(\`/api/background-images/\${imageId}\`, {
-          method: 'DELETE',
-          headers: {
-            'Content-Type': 'application/json',
-            'user': JSON.stringify(user)
-          }
-        });
-
-        const data = await response.json();
-        
-        if (response.ok) {
-          alert('Background image deleted successfully!');
-          loadBackgroundImages();
-        } else {
-          alert('Failed to delete image: ' + data.error);
-        }
-      } catch (error) {
-        alert('Error deleting image: ' + error.message);
-      }
-    }
-
-    document.getElementById('backgroundUploadForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      
-      const fileInput = document.getElementById('backgroundImage');
-      if (!fileInput.files[0]) {
-        alert('Please select an image file to upload.');
-        return;
-      }
-
-      const formData = new FormData();
-      formData.append('backgroundImage', fileInput.files[0]);
-
-      try {
-        const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
-        const response = await fetch('/api/background-images/upload', {
-          method: 'POST',
-          headers: {
-            'user': JSON.stringify(user)
-          },
-          body: formData
-        });
-
-        const data = await response.json();
-        
-        if (response.ok) {
-          alert('Background image uploaded and set as active successfully!');
-          fileInput.value = ''; // Clear file input
-          loadBackgroundImages();
-        } else {
-          alert('Failed to upload image: ' + data.error);
-        }
-      } catch (error) {
-        alert('Error uploading image: ' + error.message);
-      }
-    });
 
     async function loadLoginHistory() {
       try {
@@ -2352,7 +1940,6 @@ function getDashboardPage() {
         return;
       }
       document.getElementById('username').textContent = user.username;
-      loadBackgroundImages();
       loadLoginHistory();
       loadInventory();
     });
@@ -3662,7 +3249,6 @@ function getCSS() {
       --transition: 0.25s;
       --shadow: 0 4px 15px rgba(0,0,0,0.2);
       --shadow-light: 0 2px 8px rgba(0,0,0,0.1);
-      --overlay: rgba(15, 23, 42, 0.7);
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -3761,26 +3347,13 @@ function getCSS() {
       justify-content: center;
       padding: 20px;
       background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-      position: relative;
     }
     body.light .auth-container {
       background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
     }
-    .auth-container::before {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background: var(--overlay);
-      z-index: 0;
-    }
     .auth-header {
       text-align: center;
       margin-bottom: 40px;
-      position: relative;
-      z-index: 1;
     }
     .logo {
       font-size: 4rem;
@@ -3803,8 +3376,6 @@ function getCSS() {
       width: 100%;
       max-width: 400px;
       margin-bottom: 30px;
-      position: relative;
-      z-index: 1;
     }
     body.light .auth-card {
       background: #fff;
@@ -3833,76 +3404,6 @@ function getCSS() {
       font-size: 0.8em;
       margin-top: 5px;
       display: block;
-    }
-    
-    /* Background Image Management Styles */
-    .background-image-item {
-      background: #1e293b;
-      border-radius: var(--radius);
-      padding: 15px;
-      margin-bottom: 15px;
-      border: 2px solid #334155;
-      display: flex;
-      gap: 15px;
-      align-items: center;
-    }
-    body.light .background-image-item {
-      background: #f8fafc;
-    }
-    .background-image-item.active {
-      border-color: var(--success);
-    }
-    .background-image-preview {
-      width: 120px;
-      height: 80px;
-      border-radius: var(--radius);
-      background-size: cover;
-      background-position: center;
-      flex-shrink: 0;
-    }
-    .background-image-info {
-      flex: 1;
-    }
-    .image-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 10px;
-    }
-    .active-badge {
-      background: var(--success);
-      color: white;
-      padding: 4px 8px;
-      border-radius: 20px;
-      font-size: 0.8em;
-    }
-    .image-details {
-      display: flex;
-      gap: 15px;
-      margin-bottom: 10px;
-      flex-wrap: wrap;
-    }
-    .image-details small {
-      color: #94a3b8;
-      font-size: 0.85em;
-    }
-    .image-actions {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-    }
-    .background-upload-section {
-      margin-top: 20px;
-      padding: 20px;
-      background: #1e293b;
-      border-radius: var(--radius);
-      border: 2px dashed #475569;
-    }
-    body.light .background-upload-section {
-      background: #f8fafc;
-    }
-    .background-upload-section h4 {
-      margin-bottom: 15px;
     }
     
     /* Login History Styles */
@@ -4150,10 +3651,6 @@ function getCSS() {
       .value-item { min-width: 100%; }
       .action-buttons { flex-direction: column; }
       .login-history-header { flex-direction: column; align-items: flex-start; gap: 10px; }
-      .background-image-item { flex-direction: column; align-items: flex-start; }
-      .background-image-preview { width: 100%; height: 100px; }
-      .image-header { flex-direction: column; align-items: flex-start; gap: 10px; }
-      .image-details { flex-direction: column; gap: 5px; }
     }
   `;
 }
@@ -4237,11 +3734,4 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('   ✅ FIXED: "Purchase not found" error in PDF download');
   console.log('   ✅ FIXED: JSON parsing error for reference report PDF');
   console.log('   ✅ REMOVED: PDF download buttons from Purchase & Sales pages (Automatic download still works)');
-  console.log('   ✅ NEW: Background Image Upload for Login Page');
-  console.log('   ✅ NEW: Upload and manage multiple background images');
-  console.log('   ✅ NEW: Set active background image');
-  console.log('   ✅ NEW: Delete background images');
-  console.log('   ✅ NEW: Automatic overlay for better text readability');
-  console.log('   ✅ NEW: 5MB file size limit for images');
-  console.log('   ✅ NEW: Supports JPG, PNG, GIF, WebP formats');
 });
