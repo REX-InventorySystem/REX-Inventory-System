@@ -1303,26 +1303,30 @@ function getLoginPage() {
 </head>
 <body>
   <div class="auth-container">
-    <div class="auth-header">
-      <div class="logo">📦</div>
-      <h1 class="main-title">INVENTORY WITH INVOICE SYSTEM</h1>
-    </div>
-    
-    <div class="auth-card">
-      <form id="loginForm">
-        <div class="input-group">
-          <label>Username</label>
-          <input type="text" id="username" required placeholder="Enter your username">
-        </div>
-        <div class="input-group">
-          <label>Password</label>
-          <input type="password" id="password" required placeholder="Enter your password">
-        </div>
-        <button type="submit" class="btn full primary">Login</button>
-        <div class="auth-links">
-          <p>No account? <a href="/?page=register" class="link">Register here</a></p>
-        </div>
-      </form>
+    <div class="auth-overlay"></div>
+    <div class="auth-content">
+      <div class="auth-header">
+        <div class="logo">📦</div>
+        <h1 class="main-title">INVENTORY WITH INVOICE SYSTEM</h1>
+        <p class="subtitle">Complete Inventory Management Solution</p>
+      </div>
+      
+      <div class="auth-card">
+        <form id="loginForm">
+          <div class="input-group">
+            <label>Username</label>
+            <input type="text" id="username" required placeholder="Enter your username">
+          </div>
+          <div class="input-group">
+            <label>Password</label>
+            <input type="password" id="password" required placeholder="Enter your password">
+          </div>
+          <button type="submit" class="btn full primary">Login</button>
+          <div class="auth-links">
+            <p>No account? <a href="/?page=register" class="link">Register here</a></p>
+          </div>
+        </form>
+      </div>
     </div>
   </div>
 
@@ -1373,31 +1377,35 @@ function getRegisterPage() {
 </head>
 <body>
   <div class="auth-container">
-    <div class="auth-header">
-      <div class="logo">📦</div>
-      <h1 class="main-title">INVENTORY WITH INVOICE SYSTEM</h1>
-    </div>
-    
-    <div class="auth-card">
-      <form id="registerForm">
-        <div class="input-group">
-          <label>Username</label>
-          <input type="text" id="user" required placeholder="Choose a username">
-        </div>
-        <div class="input-group">
-          <label>Password</label>
-          <input type="password" id="pass" required placeholder="Create a password">
-        </div>
-        <div class="input-group">
-          <label>Security Code</label>
-          <input type="password" id="securityCode" required placeholder="Enter security code">
-          <small class="hint">Contact administrator for security code</small>
-        </div>
-        <button type="submit" class="btn full primary">Create Account</button>
-        <div class="auth-links">
-          <p>Already have an account? <a href="/" class="link">Login here</a></p>
-        </div>
-      </form>
+    <div class="auth-overlay"></div>
+    <div class="auth-content">
+      <div class="auth-header">
+        <div class="logo">📦</div>
+        <h1 class="main-title">INVENTORY WITH INVOICE SYSTEM</h1>
+        <p class="subtitle">Create Your Account</p>
+      </div>
+      
+      <div class="auth-card">
+        <form id="registerForm">
+          <div class="input-group">
+            <label>Username</label>
+            <input type="text" id="user" required placeholder="Choose a username">
+          </div>
+          <div class="input-group">
+            <label>Password</label>
+            <input type="password" id="pass" required placeholder="Create a password">
+          </div>
+          <div class="input-group">
+            <label>Security Code</label>
+            <input type="password" id="securityCode" required placeholder="Enter security code">
+            <small class="hint">Contact administrator for security code</small>
+          </div>
+          <button type="submit" class="btn full primary">Create Account</button>
+          <div class="auth-links">
+            <p>Already have an account? <a href="/" class="link">Login here</a></p>
+          </div>
+        </form>
+      </div>
     </div>
   </div>
 
@@ -3338,18 +3346,35 @@ function getCSS() {
     .subtotal-row { background: #334155 !important; font-weight: bold; }
     body.light .subtotal-row { background: #e2e8f0 !important; }
     
-    /* Auth Styles */
+    /* Auth Styles with Background Image */
     .auth-container {
       min-height: 100vh;
       display: flex;
-      flex-direction: column;
       align-items: center;
       justify-content: center;
       padding: 20px;
-      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+      background: linear-gradient(rgba(15, 23, 42, 0.9), rgba(15, 23, 42, 0.9)),
+                  url('https://images.pexels.com/photos/1103970/pexels-photo-1103970.jpeg') center/cover fixed;
+      position: relative;
     }
     body.light .auth-container {
-      background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+      background: linear-gradient(rgba(248, 250, 252, 0.9), rgba(248, 250, 252, 0.9)),
+                  url('https://images.pexels.com/photos/1103970/pexels-photo-1103970.jpeg') center/cover fixed;
+    }
+    .auth-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(6, 182, 212, 0.1));
+      z-index: 1;
+    }
+    .auth-content {
+      position: relative;
+      z-index: 2;
+      width: 100%;
+      max-width: 500px;
     }
     .auth-header {
       text-align: center;
@@ -3358,6 +3383,7 @@ function getCSS() {
     .logo {
       font-size: 4rem;
       margin-bottom: 20px;
+      text-shadow: 0 4px 8px rgba(0,0,0,0.3);
     }
     .main-title {
       font-size: 3rem;
@@ -3367,18 +3393,28 @@ function getCSS() {
       -webkit-text-fill-color: transparent;
       background-clip: text;
       margin-bottom: 10px;
+      text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    .subtitle {
+      color: #94a3b8;
+      font-size: 1.2rem;
+      margin-top: 10px;
+    }
+    body.light .subtitle {
+      color: #64748b;
     }
     .auth-card {
-      background: #1e293b;
+      background: rgba(30, 41, 59, 0.95);
       border-radius: var(--radius);
       padding: 40px;
       box-shadow: var(--shadow);
       width: 100%;
-      max-width: 400px;
-      margin-bottom: 30px;
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
     }
     body.light .auth-card {
-      background: #fff;
+      background: rgba(255, 255, 255, 0.95);
+      border: 1px solid rgba(0, 0, 0, 0.1);
     }
     .input-group {
       margin-bottom: 20px;
@@ -3395,6 +3431,7 @@ function getCSS() {
     .link {
       color: var(--primary);
       text-decoration: none;
+      font-weight: 500;
     }
     .link:hover {
       text-decoration: underline;
@@ -3404,6 +3441,9 @@ function getCSS() {
       font-size: 0.8em;
       margin-top: 5px;
       display: block;
+    }
+    body.light .hint {
+      color: #64748b;
     }
     
     /* Login History Styles */
@@ -3734,4 +3774,5 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('   ✅ FIXED: "Purchase not found" error in PDF download');
   console.log('   ✅ FIXED: JSON parsing error for reference report PDF');
   console.log('   ✅ REMOVED: PDF download buttons from Purchase & Sales pages (Automatic download still works)');
+  console.log('   ✅ NEW: Professional gray/white wallpaper background on login page');
 });
