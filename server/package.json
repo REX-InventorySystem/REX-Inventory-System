@@ -1,7 +1,7 @@
 {
   "name": "inventory-system-server",
   "version": "2.0.0",
-  "description": "Complete Inventory Management System with Fixed Login & Statements",
+  "description": "Rex Enterprise Inventory Management System with Fixed Login & Statements",
   "main": "single-server.js",
   "scripts": {
     "start": "node single-server.js",
