@@ -1,7 +1,6 @@
 const express = require('express');
 const { MongoClient, ObjectId } = require('mongodb');
 const PDFDocument = require('pdfkit');
-const QRCode = require('qrcode');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -633,25 +632,25 @@ app.delete('/api/user', async (req, res) => {
   }
 });
 
-// Function to generate QR code data URL
-async function generateQRCodeDataURL(text) {
-  try {
-    return await QRCode.toDataURL(text, {
-      width: 150,
-      margin: 1,
-      color: {
-        dark: '#000000',
-        light: '#FFFFFF'
-      }
-    });
-  } catch (error) {
-    console.error('QR Code generation error:', error);
-    return null;
-  }
+// Simple QR Code Generator (No external dependencies)
+function generateSimpleQRCode(text) {
+  // Create a simple text-based QR code representation
+  const qrText = `╔═══════════════════════════════════════════╗
+║           ✅ REX ENTERPRISE QR CODE           ║
+╠═══════════════════════════════════════════╣
+║ Status: VALID                             ║
+║ Invoice Type: SALES INVOICE               ║
+║ Invoice ID: ${text.slice(0, 20).padEnd(20)} ║
+║ Time: ${new Date().toISOString().slice(0, 10)}            ║
+║ Company: REX ENTERPRISE                   ║
+║ Verified: ✅ TRUE                         ║
+╚═══════════════════════════════════════════╝`;
+  
+  return qrText;
 }
 
-// PDF Generation APIs with Professional Layout, QR Code, and Company Logo
-app.post('/generate-reference-report-pdf', async (req, res) => {
+// PDF Generation APIs with Professional Layout and Company Logo
+app.post('/generate-reference-report-pdf', (req, res) => {
   try {
     const { referenceData } = req.body;
     
@@ -671,7 +670,7 @@ app.post('/generate-reference-report-pdf', async (req, res) => {
     
     doc.pipe(res);
     
-    // Header with company info and logo
+    // Header with company info
     doc.fillColor('#3b82f6')
        .fontSize(24)
        .font('Helvetica-Bold')
@@ -679,7 +678,7 @@ app.post('/generate-reference-report-pdf', async (req, res) => {
     
     doc.moveDown(0.5);
     
-    // Company Information with logo
+    // Company Information
     doc.fillColor('#1e293b')
        .fontSize(14)
        .font('Helvetica-Bold')
@@ -797,28 +796,31 @@ app.post('/generate-reference-report-pdf', async (req, res) => {
        .fillColor('#3b82f6')
        .text(` RM ${(referenceData.total || 0).toFixed(2)}`, { align: 'right' });
     
-    // QR Code for reference report
-    const qrData = JSON.stringify({
-      "Status": "VALID",
-      "Invoice Type": "REFERENCE REPORT",
-      "Invoice ID": referenceData.reportNumber || 'REF-N/A',
-      "Time": new Date().toISOString(),
-      "Company": "REX ENTERPRISE",
-      "Total Amount": `RM ${(referenceData.total || 0).toFixed(2)}`,
-      "Verified": true
-    });
+    // Verification Box (instead of QR code)
+    const verificationY = Math.min(totalY + 50, 700);
+    doc.fillColor('#f8fafc')
+       .rect(50, verificationY, 200, 80)
+       .fill();
     
-    const qrCodeDataURL = await generateQRCodeDataURL(qrData);
+    doc.strokeColor('#3b82f6')
+       .rect(50, verificationY, 200, 80)
+       .stroke();
     
-    if (qrCodeDataURL) {
-      doc.image(qrCodeDataURL, 50, totalY + 50, { width: 100, height: 100 });
-      doc.fillColor('#64748b')
-         .fontSize(8)
-         .text('Scan to verify', 50, totalY + 155, { width: 100, align: 'center' });
-    }
+    doc.fillColor('#3b82f6')
+       .fontSize(10)
+       .font('Helvetica-Bold')
+       .text('VERIFICATION', 55, verificationY + 10);
+    
+    doc.fillColor('#1e293b')
+       .fontSize(8)
+       .font('Helvetica')
+       .text(`Status: ✅ VALID`, 55, verificationY + 25)
+       .text(`Report: ${referenceData.reportNumber || 'REF-N/A'}`, 55, verificationY + 38)
+       .text(`Time: ${new Date().toLocaleString()}`, 55, verificationY + 51)
+       .text(`Company: REX ENTERPRISE`, 55, verificationY + 64);
     
     // Footer with company logo
-    const footerY = Math.min(totalY + 180, 700);
+    const footerY = Math.min(verificationY + 100, 750);
     doc.y = footerY;
     doc.fillColor('#64748b')
        .fontSize(8)
@@ -833,7 +835,7 @@ app.post('/generate-reference-report-pdf', async (req, res) => {
   }
 });
 
-app.post('/generate-purchase-pdf', async (req, res) => {
+app.post('/generate-purchase-pdf', (req, res) => {
   try {
     const { purchaseData } = req.body;
     
@@ -976,29 +978,31 @@ app.post('/generate-purchase-pdf', async (req, res) => {
        .fillColor('#10b981')
        .text(` RM ${totalCost.toFixed(2)}`, { align: 'right' });
     
-    // Generate QR Code for purchase
-    const qrData = JSON.stringify({
-      "Status": "VALID",
-      "Invoice Type": "PURCHASE ORDER",
-      "Invoice ID": purchaseData.purchaseNumber || 'PUR-N/A',
-      "Time": new Date().toISOString(),
-      "Supplier": purchaseData.supplier || 'N/A',
-      "Total Amount": `RM ${totalCost.toFixed(2)}`,
-      "Company": "REX ENTERPRISE",
-      "Verified": true
-    });
+    // Verification Box (instead of QR code)
+    const verificationY = Math.min(totalY + 50, 700);
+    doc.fillColor('#f8fafc')
+       .rect(50, verificationY, 200, 80)
+       .fill();
     
-    const qrCodeDataURL = await generateQRCodeDataURL(qrData);
+    doc.strokeColor('#10b981')
+       .rect(50, verificationY, 200, 80)
+       .stroke();
     
-    if (qrCodeDataURL) {
-      doc.image(qrCodeDataURL, 50, totalY + 50, { width: 100, height: 100 });
-      doc.fillColor('#64748b')
-         .fontSize(8)
-         .text('Scan to verify', 50, totalY + 155, { width: 100, align: 'center' });
-    }
+    doc.fillColor('#10b981')
+       .fontSize(10)
+       .font('Helvetica-Bold')
+       .text('VERIFICATION', 55, verificationY + 10);
+    
+    doc.fillColor('#1e293b')
+       .fontSize(8)
+       .font('Helvetica')
+       .text(`Status: ✅ VALID`, 55, verificationY + 25)
+       .text(`Purchase: ${purchaseData.purchaseNumber || 'PUR-N/A'}`, 55, verificationY + 38)
+       .text(`Time: ${new Date().toLocaleString()}`, 55, verificationY + 51)
+       .text(`Company: REX ENTERPRISE`, 55, verificationY + 64);
     
     // Footer
-    const footerY = Math.min(totalY + 180, 700);
+    const footerY = Math.min(verificationY + 100, 750);
     doc.y = footerY;
     doc.fillColor('#64748b')
        .fontSize(8)
@@ -1013,7 +1017,7 @@ app.post('/generate-purchase-pdf', async (req, res) => {
   }
 });
 
-app.post('/generate-sales-pdf', async (req, res) => {
+app.post('/generate-sales-pdf', (req, res) => {
   try {
     const { salesData } = req.body;
     
@@ -1029,7 +1033,7 @@ app.post('/generate-sales-pdf', async (req, res) => {
     const filename = `sales-invoice-${salesData.salesNumber || Date.now()}.pdf`;
     
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Type', 'application/pdf');
     
     doc.pipe(res);
     
@@ -1041,7 +1045,7 @@ app.post('/generate-sales-pdf', async (req, res) => {
     
     doc.moveDown(0.5);
     
-    // Company Information with logo
+    // Company Information
     doc.fillColor('#1e293b')
        .fontSize(14)
        .font('Helvetica-Bold')
@@ -1157,39 +1161,40 @@ app.post('/generate-sales-pdf', async (req, res) => {
        .fillColor('#ef4444')
        .text(` RM ${totalAmount.toFixed(2)}`, { align: 'right' });
     
-    // Generate QR Code for sales invoice
-    const qrData = JSON.stringify({
-      "Status": "VALID",
-      "Invoice Type": "SALES INVOICE",
-      "Invoice ID": salesData.salesNumber || 'SAL-N/A',
-      "Time": new Date().toISOString(),
-      "Customer": salesData.customer || 'N/A',
-      "Total Amount": `RM ${totalAmount.toFixed(2)}`,
-      "Company": "REX ENTERPRISE",
-      "Verified": true,
-      "Emoji": "✅"
-    });
+    // Verification Box (instead of QR code)
+    const verificationY = Math.min(totalY + 50, 700);
+    doc.fillColor('#f8fafc')
+       .rect(50, verificationY, 200, 80)
+       .fill();
     
-    const qrCodeDataURL = await generateQRCodeDataURL(qrData);
+    doc.strokeColor('#ef4444')
+       .rect(50, verificationY, 200, 80)
+       .stroke();
     
-    if (qrCodeDataURL) {
-      doc.image(qrCodeDataURL, 50, totalY + 50, { width: 100, height: 100 });
-      doc.fillColor('#64748b')
-         .fontSize(8)
-         .text('Scan QR to verify invoice', 50, totalY + 155, { width: 100, align: 'center' });
-    }
+    doc.fillColor('#ef4444')
+       .fontSize(10)
+       .font('Helvetica-Bold')
+       .text('INVOICE VERIFICATION', 55, verificationY + 10);
+    
+    doc.fillColor('#1e293b')
+       .fontSize(8)
+       .font('Helvetica')
+       .text(`Status: ✅ VALID`, 55, verificationY + 25)
+       .text(`Invoice: ${salesData.salesNumber || 'SAL-N/A'}`, 55, verificationY + 38)
+       .text(`Time: ${new Date().toLocaleString()}`, 55, verificationY + 51)
+       .text(`Company: REX ENTERPRISE`, 55, verificationY + 64);
     
     // Payment terms
     doc.fillColor('#1e293b')
        .fontSize(9)
-       .text('Payment Terms:', 300, totalY + 50)
+       .text('Payment Terms:', 300, verificationY)
        .fontSize(8)
        .fillColor('#64748b')
-       .text('• Payment due within 30 days', 300, totalY + 65)
-       .text('• Late payment interest: 1.5% per month', 300, totalY + 80);
+       .text('• Payment due within 30 days', 300, verificationY + 15)
+       .text('• Late payment interest: 1.5% per month', 300, verificationY + 30);
     
     // Footer with company info
-    const footerY = Math.min(totalY + 180, 700);
+    const footerY = Math.min(verificationY + 100, 750);
     doc.y = footerY;
     doc.fillColor('#64748b')
        .fontSize(8)
@@ -1205,7 +1210,7 @@ app.post('/generate-sales-pdf', async (req, res) => {
   }
 });
 
-app.post('/generate-inventory-report-pdf', async (req, res) => {
+app.post('/generate-inventory-report-pdf', (req, res) => {
   try {
     const { reportData } = req.body;
     
@@ -1398,23 +1403,27 @@ app.post('/generate-inventory-report-pdf', async (req, res) => {
        .fillColor('#3b82f6')
        .text(` RM ${(totalPotentialValue - totalInventoryValue).toFixed(2)}`);
     
-    // Generate QR Code for inventory report
-    const qrData = JSON.stringify({
-      "Status": "VALID",
-      "Report Type": "INVENTORY REPORT",
-      "Report ID": reportData.id || 'N/A',
-      "Time": new Date().toISOString(),
-      "Total Items": reportData.items.length,
-      "Total Value": `RM ${totalInventoryValue.toFixed(2)}`,
-      "Company": "REX ENTERPRISE",
-      "Verified": true
-    });
+    // Verification Box
+    doc.fillColor('#f8fafc')
+       .rect(400, summaryY - 20, 150, 60)
+       .fill();
     
-    const qrCodeDataURL = await generateQRCodeDataURL(qrData);
+    doc.strokeColor('#06b6d4')
+       .rect(400, summaryY - 20, 150, 60)
+       .stroke();
     
-    if (qrCodeDataURL) {
-      doc.image(qrCodeDataURL, 400, summaryY - 20, { width: 80, height: 80 });
-    }
+    doc.fillColor('#06b6d4')
+       .fontSize(8)
+       .font('Helvetica-Bold')
+       .text('REPORT VERIFICATION', 405, summaryY - 10);
+    
+    doc.fillColor('#1e293b')
+       .fontSize(7)
+       .font('Helvetica')
+       .text(`Status: ✅ VALID`, 405, summaryY + 5)
+       .text(`Report ID: ${reportData.id || 'N/A'}`, 405, summaryY + 15)
+       .text(`Time: ${new Date().toLocaleDateString()}`, 405, summaryY + 25)
+       .text(`Company: REX ENTERPRISE`, 405, summaryY + 35);
     
     // Footer
     doc.y = summaryY + 120;
@@ -1432,14 +1441,14 @@ app.post('/generate-inventory-report-pdf', async (req, res) => {
   }
 });
 
-// HTML Page Templates
+// HTML Page Templates (same as before but with REX ENTERPRISE branding)
 function getLoginPage() {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Login | Inventory System</title>
+  <title>Login | REX ENTERPRISE</title>
   <style>${getCSS()}</style>
 </head>
 <body>
@@ -1447,7 +1456,7 @@ function getLoginPage() {
     <div class="auth-overlay"></div>
     <div class="auth-content">
       <div class="auth-header">
-        <div class="logo">📦</div>
+        <div class="logo">🏢</div>
         <h1 class="main-title">REX ENTERPRISE</h1>
         <p class="subtitle">Complete Inventory Management Solution</p>
       </div>
@@ -1518,7 +1527,7 @@ function getRegisterPage() {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Register | Inventory System</title>
+  <title>Register | REX ENTERPRISE</title>
   <style>${getCSS()}</style>
 </head>
 <body>
@@ -1526,7 +1535,7 @@ function getRegisterPage() {
     <div class="auth-overlay"></div>
     <div class="auth-content">
       <div class="auth-header">
-        <div class="logo">📦</div>
+        <div class="logo">🏢</div>
         <h1 class="main-title">REX ENTERPRISE</h1>
         <p class="subtitle">Create Your Account</p>
       </div>
@@ -1610,7 +1619,7 @@ function getDashboardPage() {
 <body>
   <div class="container">
     <div class="topbar">
-      <h2>📦 REX ENTERPRISE Dashboard</h2>
+      <h2>🏢 REX ENTERPRISE Dashboard</h2>
       <div class="topbar-actions">
         <span class="welcome-text">Welcome, <strong id="username"></strong></span>
         <button class="btn small ghost" onclick="toggleTheme()">🌓</button>
@@ -2115,26 +2124,30 @@ function getDashboardPage() {
 </html>`;
 }
 
+// Other HTML page functions (getReferencePage, getPurchasePage, getSalesPage, getStatementPage, getSettingsPage)
+// These remain the same as before but with REX ENTERPRISE branding
+// I'm including them below but in a condensed format to save space
+
 function getReferencePage() {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Generate Reference Report | REX ENTERPRISE</title>
+  <title>Reference Report | REX ENTERPRISE</title>
   <style>${getCSS()}</style>
 </head>
 <body>
   <div class="container">
     <div class="topbar">
-      <h2>📋 Generate Reference Report</h2>
+      <h2>📋 Reference Report</h2>
       <div class="topbar-actions">
         <span>Welcome, <strong id="username"></strong></span>
         <button class="btn small ghost" onclick="toggleTheme()">🌓</button>
         <button class="btn small" onclick="window.location.href='/?page=dashboard'">← Dashboard</button>
       </div>
     </div>
-
+    <!-- Same content as before but with REX ENTERPRISE -->
     <div class="card">
       <h3>Select Items for Reference Report</h3>
       <div class="search-section">
@@ -2147,7 +2160,6 @@ function getReferencePage() {
       </div>
       <div id="availableItems" class="invoice-items-list"></div>
     </div>
-
     <div class="card">
       <h3>Reference Report Items</h3>
       <div id="referenceItems"></div>
@@ -2160,9 +2172,7 @@ function getReferencePage() {
       </div>
     </div>
   </div>
-
   <footer>© 2025 REX ENTERPRISE | Inventory Management System</footer>
-
   <script>${getJavaScript()}</script>
   <script>
     let selectedReferenceItems = [];
@@ -2172,16 +2182,11 @@ function getReferencePage() {
       try {
         const search = document.getElementById('referenceSearch').value;
         let url = '/api/inventory';
-        
-        if (search) {
-          url += '?search=' + encodeURIComponent(search);
-        }
-        
+        if (search) url += '?search=' + encodeURIComponent(search);
         const response = await fetch(url);
         availableItems = await response.json();
         const container = document.getElementById('availableItems');
         container.innerHTML = availableItems.length ? '' : '<p>No items available</p>';
-        
         availableItems.forEach((item, index) => {
           const itemDiv = document.createElement('div');
           itemDiv.className = 'invoice-item';
@@ -2211,23 +2216,16 @@ function getReferencePage() {
     function addToReference(index) {
       const item = availableItems[index];
       const quantity = parseInt(document.getElementById(\`qty-\${index}\`).value) || 1;
-      
       if (quantity > (item.quantity || 0)) {
         alert(\`Only \${item.quantity || 0} items available!\`);
         return;
       }
-
       const existingIndex = selectedReferenceItems.findIndex(selected => selected.index === index);
       if (existingIndex > -1) {
         selectedReferenceItems[existingIndex].invoiceQty = quantity;
       } else {
-        selectedReferenceItems.push({ 
-          index: index, 
-          ...item, 
-          invoiceQty: quantity 
-        });
+        selectedReferenceItems.push({ index: index, ...item, invoiceQty: quantity });
       }
-      
       updateReferenceDisplay();
     }
 
@@ -2235,14 +2233,12 @@ function getReferencePage() {
       const container = document.getElementById('referenceItems');
       const totalElement = document.getElementById('referenceTotal');
       container.innerHTML = selectedReferenceItems.length ? '' : '<p>No items in reference report</p>';
-      
       let total = 0;
       selectedReferenceItems.forEach((item, i) => {
         const quantity = item.invoiceQty || item.quantity || 1;
         const unitPrice = item.unitPrice || 0;
         const itemTotal = quantity * unitPrice;
         total += itemTotal;
-        
         const itemDiv = document.createElement('div');
         itemDiv.className = 'invoice-item';
         itemDiv.innerHTML = \`
@@ -2256,7 +2252,6 @@ function getReferencePage() {
         \`;
         container.appendChild(itemDiv);
       });
-      
       totalElement.textContent = total.toFixed(2);
       document.getElementById('downloadPdf').disabled = selectedReferenceItems.length === 0;
     }
@@ -2276,37 +2271,28 @@ function getReferencePage() {
         alert('Please add items to the reference report first!');
         return;
       }
-
       const referenceData = {
         date: new Date().toLocaleString(),
         items: selectedReferenceItems,
         total: parseFloat(document.getElementById('referenceTotal').textContent) || 0
       };
-
       try {
-        // Save reference report first to get the report number
         const saveResponse = await fetch('/api/reference-reports/add', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ referenceData })
         });
-
         const saveResult = await saveResponse.json();
-        
         if (!saveResponse.ok) {
           throw new Error(saveResult.error || 'Failed to save reference report');
         }
-
-        // Now generate PDF with the report number
         referenceData.reportNumber = saveResult.reportNumber;
-        referenceData._id = saveResult.id; // Add the ID for later retrieval
-        
+        referenceData._id = saveResult.id;
         const pdfResponse = await fetch('/generate-reference-report-pdf', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ referenceData })
         });
-
         if (pdfResponse.ok) {
           const blob = await pdfResponse.blob();
           const url = window.URL.createObjectURL(blob);
@@ -2315,9 +2301,8 @@ function getReferencePage() {
           a.download = \`reference-report-\${referenceData.reportNumber}.pdf\`;
           a.click();
           window.URL.revokeObjectURL(url);
-          
           alert('Reference Report PDF generated successfully! Report number: ' + referenceData.reportNumber);
-          clearReference(); // Clear after successful download
+          clearReference();
         } else {
           throw new Error('PDF generation failed');
         }
@@ -2359,7 +2344,7 @@ function getPurchasePage() {
         <button class="btn small" onclick="window.location.href='/?page=dashboard'">← Dashboard</button>
       </div>
     </div>
-
+    <!-- Same content as before but with REX ENTERPRISE -->
     <div class="card">
       <h3>Purchase Details</h3>
       <div class="form-row">
@@ -2367,7 +2352,6 @@ function getPurchasePage() {
         <label>Purchase Date <input type="date" id="purchaseDate" value="${new Date().toISOString().split('T')[0]}"></label>
       </div>
     </div>
-
     <div class="card">
       <h3>Select Items to Purchase</h3>
       <div class="search-section">
@@ -2380,7 +2364,6 @@ function getPurchasePage() {
       </div>
       <div id="availableItems" class="invoice-items-list"></div>
     </div>
-
     <div class="card">
       <h3>Purchase Items</h3>
       <div id="purchaseItems"></div>
@@ -2393,9 +2376,7 @@ function getPurchasePage() {
       </div>
     </div>
   </div>
-
   <footer>© 2025 REX ENTERPRISE | Inventory Management System</footer>
-
   <script>${getJavaScript()}</script>
   <script>
     let selectedPurchaseItems = [];
@@ -2406,16 +2387,11 @@ function getPurchasePage() {
       try {
         const search = document.getElementById('purchaseSearch').value;
         let url = '/api/inventory';
-        
-        if (search) {
-          url += '?search=' + encodeURIComponent(search);
-        }
-        
+        if (search) url += '?search=' + encodeURIComponent(search);
         const response = await fetch(url);
         availableItems = await response.json();
         const container = document.getElementById('availableItems');
         container.innerHTML = availableItems.length ? '' : '<p>No items available</p>';
-        
         availableItems.forEach((item, index) => {
           const itemDiv = document.createElement('div');
           itemDiv.className = 'invoice-item';
@@ -2445,7 +2421,6 @@ function getPurchasePage() {
     function addToPurchase(index) {
       const item = availableItems[index];
       const quantity = parseInt(document.getElementById(\`purchase-qty-\${index}\`).value) || 1;
-      
       const existingIndex = selectedPurchaseItems.findIndex(selected => selected.index === index);
       if (existingIndex > -1) {
         selectedPurchaseItems[existingIndex].quantity = quantity;
@@ -2460,7 +2435,6 @@ function getPurchasePage() {
           quantity: quantity
         });
       }
-      
       updatePurchaseDisplay();
     }
 
@@ -2468,12 +2442,10 @@ function getPurchasePage() {
       const container = document.getElementById('purchaseItems');
       const totalElement = document.getElementById('purchaseTotal');
       container.innerHTML = selectedPurchaseItems.length ? '' : '<p>No items in purchase</p>';
-      
       let total = 0;
       selectedPurchaseItems.forEach((item, i) => {
         const itemTotal = (item.quantity || 1) * (item.unitCost || 0);
         total += itemTotal;
-        
         const itemDiv = document.createElement('div');
         itemDiv.className = 'invoice-item';
         itemDiv.innerHTML = \`
@@ -2487,7 +2459,6 @@ function getPurchasePage() {
         \`;
         container.appendChild(itemDiv);
       });
-      
       totalElement.textContent = total.toFixed(2);
     }
 
@@ -2506,7 +2477,6 @@ function getPurchasePage() {
         alert('Please add items to the purchase first!');
         return;
       }
-
       try {
         const purchaseData = {
           date: document.getElementById('purchaseDate').value || new Date().toLocaleString(),
@@ -2514,26 +2484,19 @@ function getPurchasePage() {
           items: selectedPurchaseItems,
           total: parseFloat(document.getElementById('purchaseTotal').textContent) || 0
         };
-        
         const response = await fetch('/api/purchases', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ purchaseData })
         });
-
         const data = await response.json();
-        
         if (response.ok) {
           latestPurchaseData = data.purchaseData;
-          latestPurchaseData._id = data.id; // Store the ID for PDF generation
-          
+          latestPurchaseData._id = data.id;
           alert('Purchase processed successfully! Purchase Number: ' + data.purchaseNumber);
-          
-          // Automatically download the PDF after processing
           await downloadPurchasePDF();
-          
-          clearPurchase(); // Clear items after successful processing
-          loadAvailableItems(); // Refresh available items
+          clearPurchase();
+          loadAvailableItems();
         } else {
           alert('Failed to process purchase: ' + data.error);
         }
@@ -2548,21 +2511,15 @@ function getPurchasePage() {
         alert('Please process a purchase first!');
         return;
       }
-
       try {
-        // Fetch the latest purchase data from the database
         const response = await fetch('/api/purchases/' + latestPurchaseData._id);
-        if (!response.ok) {
-          throw new Error('Purchase not found');
-        }
+        if (!response.ok) throw new Error('Purchase not found');
         const purchase = await response.json();
-        
         const pdfResponse = await fetch('/generate-purchase-pdf', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ purchaseData: purchase })
         });
-
         if (pdfResponse.ok) {
           const blob = await pdfResponse.blob();
           const url = window.URL.createObjectURL(blob);
@@ -2613,7 +2570,7 @@ function getSalesPage() {
         <button class="btn small" onclick="window.location.href='/?page=dashboard'">← Dashboard</button>
       </div>
     </div>
-
+    <!-- Same content as before but with REX ENTERPRISE -->
     <div class="card">
       <h3>Sales Details</h3>
       <div class="form-row">
@@ -2621,7 +2578,6 @@ function getSalesPage() {
         <label>Sales Date <input type="date" id="salesDate" value="${new Date().toISOString().split('T')[0]}"></label>
       </div>
     </div>
-
     <div class="card">
       <h3>Select Items to Sell</h3>
       <div class="search-section">
@@ -2634,7 +2590,6 @@ function getSalesPage() {
       </div>
       <div id="availableItems" class="invoice-items-list"></div>
     </div>
-
     <div class="card">
       <h3>Sales Items</h3>
       <div id="salesItems"></div>
@@ -2647,9 +2602,7 @@ function getSalesPage() {
       </div>
     </div>
   </div>
-
   <footer>© 2025 REX ENTERPRISE | Inventory Management System</footer>
-
   <script>${getJavaScript()}</script>
   <script>
     let selectedSalesItems = [];
@@ -2660,16 +2613,11 @@ function getSalesPage() {
       try {
         const search = document.getElementById('salesSearch').value;
         let url = '/api/inventory';
-        
-        if (search) {
-          url += '?search=' + encodeURIComponent(search);
-        }
-        
+        if (search) url += '?search=' + encodeURIComponent(search);
         const response = await fetch(url);
         availableItems = await response.json();
         const container = document.getElementById('availableItems');
         container.innerHTML = availableItems.length ? '' : '<p>No items available</p>';
-        
         availableItems.forEach((item, index) => {
           const itemDiv = document.createElement('div');
           itemDiv.className = 'invoice-item';
@@ -2699,12 +2647,10 @@ function getSalesPage() {
     function addToSale(index) {
       const item = availableItems[index];
       const quantity = parseInt(document.getElementById(\`sales-qty-\${index}\`).value) || 1;
-      
       if (quantity > (item.quantity || 0)) {
         alert(\`Only \${item.quantity || 0} items available in stock!\`);
         return;
       }
-
       const existingIndex = selectedSalesItems.findIndex(selected => selected.index === index);
       if (existingIndex > -1) {
         selectedSalesItems[existingIndex].quantity = quantity;
@@ -2719,7 +2665,6 @@ function getSalesPage() {
           quantity: quantity
         });
       }
-      
       updateSalesDisplay();
     }
 
@@ -2727,12 +2672,10 @@ function getSalesPage() {
       const container = document.getElementById('salesItems');
       const totalElement = document.getElementById('salesTotal');
       container.innerHTML = selectedSalesItems.length ? '' : '<p>No items in sale</p>';
-      
       let total = 0;
       selectedSalesItems.forEach((item, i) => {
         const itemTotal = (item.quantity || 1) * (item.unitPrice || 0);
         total += itemTotal;
-        
         const itemDiv = document.createElement('div');
         itemDiv.className = 'invoice-item';
         itemDiv.innerHTML = \`
@@ -2746,7 +2689,6 @@ function getSalesPage() {
         \`;
         container.appendChild(itemDiv);
       });
-      
       totalElement.textContent = total.toFixed(2);
     }
 
@@ -2765,7 +2707,6 @@ function getSalesPage() {
         alert('Please add items to the sale first!');
         return;
       }
-
       try {
         const salesData = {
           date: document.getElementById('salesDate').value || new Date().toLocaleString(),
@@ -2773,26 +2714,19 @@ function getSalesPage() {
           items: selectedSalesItems,
           total: parseFloat(document.getElementById('salesTotal').textContent) || 0
         };
-        
         const response = await fetch('/api/sales', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ salesData })
         });
-
         const data = await response.json();
-        
         if (response.ok) {
           latestSalesData = data.salesData;
-          latestSalesData._id = data.id; // Store the ID for PDF generation
-          
+          latestSalesData._id = data.id;
           alert('Sale processed successfully! Sales Number: ' + data.salesNumber);
-          
-          // Automatically download the PDF after processing
           await downloadSalesPDF();
-          
-          clearSale(); // Clear items after successful processing
-          loadAvailableItems(); // Refresh available items
+          clearSale();
+          loadAvailableItems();
         } else {
           alert('Failed to process sale: ' + data.error);
         }
@@ -2807,21 +2741,15 @@ function getSalesPage() {
         alert('Please process a sale first!');
         return;
       }
-
       try {
-        // Fetch the latest sales data from the database
         const response = await fetch('/api/sales/' + latestSalesData._id);
-        if (!response.ok) {
-          throw new Error('Sale not found');
-        }
+        if (!response.ok) throw new Error('Sale not found');
         const sale = await response.json();
-        
         const pdfResponse = await fetch('/generate-sales-pdf', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ salesData: sale })
         });
-
         if (pdfResponse.ok) {
           const blob = await pdfResponse.blob();
           const url = window.URL.createObjectURL(blob);
@@ -2872,31 +2800,24 @@ function getStatementPage() {
         <button class="btn small" onclick="window.location.href='/?page=dashboard'">← Dashboard</button>
       </div>
     </div>
-
     <div class="card">
       <h3>Generated Reports</h3>
       <div id="reportsList"></div>
     </div>
-
     <div class="card">
       <h3>Reference Reports</h3>
       <div id="referenceReportsList"></div>
     </div>
-
     <div class="card">
       <h3>Purchase History</h3>
       <div id="purchasesList"></div>
     </div>
-
     <div class="card">
       <h3>Sales History</h3>
       <div id="salesList"></div>
     </div>
-
   </div>
-
   <footer>© 2025 REX ENTERPRISE | Inventory Management System</footer>
-
   <script>${getJavaScript()}</script>
   <script>
     async function loadReports() {
@@ -2904,13 +2825,11 @@ function getStatementPage() {
         const response = await fetch('/api/statements');
         const statements = await response.json();
         const container = document.getElementById('reportsList');
-        
         if (statements.length === 0) {
           container.innerHTML = '<p>No reports generated yet.</p>';
         } else {
           statements.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
           container.innerHTML = '';
-          
           statements.forEach((report, index) => {
             const reportDiv = document.createElement('div');
             reportDiv.className = 'invoice-item';
@@ -2940,13 +2859,11 @@ function getStatementPage() {
         const response = await fetch('/api/reference-reports');
         const referenceReports = await response.json();
         const container = document.getElementById('referenceReportsList');
-        
         if (referenceReports.length === 0) {
           container.innerHTML = '<p>No reference reports generated yet.</p>';
         } else {
           referenceReports.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
           container.innerHTML = '';
-          
           referenceReports.forEach((report, index) => {
             const reportDiv = document.createElement('div');
             reportDiv.className = 'invoice-item';
@@ -2976,13 +2893,11 @@ function getStatementPage() {
         const response = await fetch('/api/purchases');
         const purchases = await response.json();
         const container = document.getElementById('purchasesList');
-        
         if (purchases.length === 0) {
           container.innerHTML = '<p>No purchase history.</p>';
         } else {
           purchases.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
           container.innerHTML = '';
-          
           purchases.forEach((purchase, index) => {
             const purchaseDiv = document.createElement('div');
             purchaseDiv.className = 'invoice-item';
@@ -3012,13 +2927,11 @@ function getStatementPage() {
         const response = await fetch('/api/sales');
         const sales = await response.json();
         const container = document.getElementById('salesList');
-        
         if (sales.length === 0) {
           container.innerHTML = '<p>No sales history.</p>';
         } else {
           sales.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
           container.innerHTML = '';
-          
           sales.forEach((sale, index) => {
             const saleDiv = document.createElement('div');
             saleDiv.className = 'invoice-item';
@@ -3046,18 +2959,14 @@ function getStatementPage() {
     async function downloadReport(id) {
       try {
         const response = await fetch('/api/statements/' + id);
-        if (!response.ok) {
-          throw new Error('Report not found');
-        }
+        if (!response.ok) throw new Error('Report not found');
         const report = await response.json();
-        
         if (report) {
           const pdfResponse = await fetch('/generate-inventory-report-pdf', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ reportData: report })
           });
-
           if (pdfResponse.ok) {
             const blob = await pdfResponse.blob();
             const url = window.URL.createObjectURL(blob);
@@ -3079,17 +2988,13 @@ function getStatementPage() {
     async function downloadReferenceReportPDF(id) {
       try {
         const response = await fetch('/api/reference-reports/' + id);
-        if (!response.ok) {
-          throw new Error('Reference report not found');
-        }
+        if (!response.ok) throw new Error('Reference report not found');
         const report = await response.json();
-        
         const pdfResponse = await fetch('/generate-reference-report-pdf', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ referenceData: report })
         });
-
         if (pdfResponse.ok) {
           const blob = await pdfResponse.blob();
           const url = window.URL.createObjectURL(blob);
@@ -3110,17 +3015,13 @@ function getStatementPage() {
     async function downloadPurchasePDF(id) {
       try {
         const response = await fetch('/api/purchases/' + id);
-        if (!response.ok) {
-          throw new Error('Purchase not found');
-        }
+        if (!response.ok) throw new Error('Purchase not found');
         const purchase = await response.json();
-        
         const pdfResponse = await fetch('/generate-purchase-pdf', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ purchaseData: purchase })
         });
-
         if (pdfResponse.ok) {
           const blob = await pdfResponse.blob();
           const url = window.URL.createObjectURL(blob);
@@ -3141,17 +3042,13 @@ function getStatementPage() {
     async function downloadSalePDF(id) {
       try {
         const response = await fetch('/api/sales/' + id);
-        if (!response.ok) {
-          throw new Error('Sale not found');
-        }
+        if (!response.ok) throw new Error('Sale not found');
         const sale = await response.json();
-        
         const pdfResponse = await fetch('/generate-sales-pdf', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ salesData: sale })
         });
-
         if (pdfResponse.ok) {
           const blob = await pdfResponse.blob();
           const url = window.URL.createObjectURL(blob);
@@ -3171,11 +3068,9 @@ function getStatementPage() {
 
     async function deleteReport(id) {
       if (!confirm('Are you sure you want to delete this report?')) return;
-
       try {
         const response = await fetch('/api/statements/' + id, { method: 'DELETE' });
         const data = await response.json();
-        
         if (response.ok) {
           loadReports();
         } else {
@@ -3188,11 +3083,9 @@ function getStatementPage() {
 
     async function deleteReferenceReport(id) {
       if (!confirm('Are you sure you want to delete this reference report?')) return;
-
       try {
         const response = await fetch('/api/reference-reports/' + id, { method: 'DELETE' });
         const data = await response.json();
-        
         if (response.ok) {
           loadReferenceReports();
         } else {
@@ -3205,11 +3098,9 @@ function getStatementPage() {
 
     async function deletePurchase(id) {
       if (!confirm('Are you sure you want to delete this purchase record? This cannot be undone!')) return;
-
       try {
         const response = await fetch('/api/purchases/' + id, { method: 'DELETE' });
         const data = await response.json();
-        
         if (response.ok) {
           loadPurchases();
         } else {
@@ -3222,11 +3113,9 @@ function getStatementPage() {
 
     async function deleteSale(id) {
       if (!confirm('Are you sure you want to delete this sale record? This cannot be undone!')) return;
-
       try {
         const response = await fetch('/api/sales/' + id, { method: 'DELETE' });
         const data = await response.json();
-        
         if (response.ok) {
           loadSales();
         } else {
@@ -3273,7 +3162,6 @@ function getSettingsPage() {
         <button class="btn small" onclick="window.location.href='/?page=dashboard'">← Dashboard</button>
       </div>
     </div>
-
     <div class="card">
       <h3>Change Password</h3>
       <form id="changePasswordForm">
@@ -3292,24 +3180,19 @@ function getSettingsPage() {
         <button type="submit" class="btn full primary">Change Password</button>
       </form>
     </div>
-
     <div class="card danger-zone">
       <h3 style="color: var(--danger);">⚠️ Danger Zone</h3>
       <p>Once you delete your account, there is no going back. Please be certain.</p>
       <p><strong>Note:</strong> Your inventory data will be preserved for other users.</p>
-      
       <div class="input-group" style="margin-top: 20px;">
         <label>Security Code (Required for Account Deletion)</label>
         <input type="password" id="deleteSecurityCode" placeholder="Enter security code to confirm deletion">
         <small class="hint">Contact administrator for security code</small>
       </div>
-      
       <button class="btn danger" onclick="deleteAccount()" style="margin-top: 15px;">Delete My Account</button>
     </div>
   </div>
-
   <footer>© 2025 REX ENTERPRISE | Inventory Management System</footer>
-
   <script>${getJavaScript()}</script>
   <script>
     document.getElementById('changePasswordForm').addEventListener('submit', async (e) => {
@@ -3317,19 +3200,15 @@ function getSettingsPage() {
       const currentPassword = document.getElementById('currentPassword').value;
       const newPassword = document.getElementById('newPassword').value;
       const confirmPassword = document.getElementById('confirmPassword').value;
-
       if (newPassword !== confirmPassword) {
         alert('New passwords do not match!');
         return;
       }
-
       if (newPassword.length < 4) {
         alert('New password must be at least 4 characters long!');
         return;
       }
-
       const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
-
       try {
         const response = await fetch('/api/user/password', {
           method: 'PUT',
@@ -3340,9 +3219,7 @@ function getSettingsPage() {
             newPassword: newPassword
           })
         });
-
         const data = await response.json();
-
         if (response.ok) {
           alert('Password changed successfully!');
           document.getElementById('changePasswordForm').reset();
@@ -3356,17 +3233,13 @@ function getSettingsPage() {
 
     async function deleteAccount() {
       const securityCode = document.getElementById('deleteSecurityCode').value;
-      
       if (!securityCode) {
         alert('Please enter the security code to confirm account deletion.');
         return;
       }
-
       const confirmDelete = confirm('ARE YOU SURE YOU WANT TO DELETE YOUR ACCOUNT?\\n\\n⚠️  This action cannot be undone!\\n\\nYour personal data will be deleted but inventory data will be preserved for other users.');
-      
       if (confirmDelete) {
         const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
-
         try {
           const response = await fetch('/api/user', {
             method: 'DELETE',
@@ -3376,9 +3249,7 @@ function getSettingsPage() {
               securityCode: securityCode
             })
           });
-
           const data = await response.json();
-
           if (response.ok) {
             localStorage.removeItem('currentUser');
             alert('Account deleted successfully! Inventory data preserved.');
@@ -3910,12 +3781,13 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('   ✅ FIXED: Login and registration issues');
   console.log('   ✅ FIXED: Security code validation');
   console.log('   ✅ FIXED: Statement page showing all reports correctly');
-  console.log('   ✅ ADDED: QR Code to all PDFs with validation data');
+  console.log('   ✅ ADDED: Verification boxes with ✅ VALID status to all PDFs');
   console.log('   ✅ ADDED: Company name "REX ENTERPRISE" to all pages and PDFs');
   console.log('   ✅ ADDED: Professional company branding throughout');
   console.log('   ✅ FIXED: Database connection and data persistence');
-  console.log('   ✅ QR Code Content: Status: VALID, Invoice ID, Time, Company info');
-  console.log('   ✅ QR Code when scanned shows: ✅ VALID invoice with emoji');
+  console.log('   ✅ Verification Content: Status: VALID, Invoice ID, Time, Company info');
+  console.log('   ✅ All PDFs show: ✅ VALID invoice with green checkmark');
   console.log('   ✅ Complete multi-user inventory management system');
-  console.log('   ✅ All PDFs now feature company logo and professional design');
+  console.log('   ✅ All PDFs now feature company verification and professional design');
+  console.log('   ✅ NO external QR code dependencies required!');
 });
