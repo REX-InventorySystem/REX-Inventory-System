@@ -1,5 +1,3 @@
-[file name]: single-server (5).js
-[file content begin]
 const express = require('express');
 const { MongoClient, ObjectId } = require('mongodb');
 const PDFDocument = require('pdfkit');
@@ -3893,4 +3891,4 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('   ✅ Company Logo on all PDF Reports');
   console.log('   ✅ Professional Footer with Company Contact Information');
 });
-[file content end]
+
