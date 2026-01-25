@@ -661,7 +661,7 @@ function drawCompanyHeader(doc) {
   doc.fillColor('#ffffff')
      .fontSize(24)
      .font('Helvetica-Bold')
-     .text('🏢 REX ENTERPRISE', 60, 55);
+     .text('REX ENTERPRISE', 60, 55);
   
   // Company tagline
   doc.fillColor('#dbeafe')
