@@ -11,6 +11,15 @@ const VALID_SECURITY_CODE = "INV2025";
 
 let db;
 
+// Company Information
+const COMPANY_INFO = {
+  name: "Rex Enterprise",
+  address: "123 Business Street, City, Country",
+  phone: "+60 12-345 6789",
+  email: "info@rexenterprise.com",
+  website: "www.rexenterprise.com"
+};
+
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -639,7 +648,93 @@ app.delete('/api/user', async (req, res) => {
   }
 });
 
-// PDF Generation APIs with Professional Layout (Single Page)
+// Function to draw company logo
+function drawCompanyLogo(doc, x, y, size = 60) {
+  // Draw a professional logo with R letter inside a circle
+  const logoRadius = size / 2;
+  
+  // Draw circle background
+  doc.save();
+  doc.translate(x + logoRadius, y + logoRadius);
+  
+  // Draw gradient circle
+  const gradient = doc.linearGradient(-logoRadius, -logoRadius, logoRadius, logoRadius);
+  gradient.stop(0, '#3b82f6');
+  gradient.stop(1, '#06b6d4');
+  
+  doc.circle(0, 0, logoRadius)
+     .fill(gradient);
+  
+  // Draw white R letter
+  doc.fillColor('#ffffff')
+     .font('Helvetica-Bold')
+     .fontSize(logoRadius * 0.6)
+     .text('R', -logoRadius * 0.25, -logoRadius * 0.25, {
+       width: logoRadius * 1.5,
+       align: 'center'
+     });
+  
+  doc.restore();
+}
+
+// Function to draw company header
+function drawCompanyHeader(doc, yPosition) {
+  const centerX = doc.page.width / 2;
+  
+  // Draw logo
+  drawCompanyLogo(doc, centerX - 30, yPosition, 60);
+  
+  // Company name
+  doc.fillColor('#3b82f6')
+     .fontSize(24)
+     .font('Helvetica-Bold')
+     .text('Rex Enterprise', centerX, yPosition + 65, { align: 'center' });
+  
+  // Company tagline
+  doc.fillColor('#64748b')
+     .fontSize(11)
+     .font('Helvetica')
+     .text('Professional Inventory Solutions', centerX, yPosition + 85, { align: 'center' });
+  
+  // Company contact info
+  doc.fillColor('#94a3b8')
+     .fontSize(9)
+     .text(`${COMPANY_INFO.address} | Phone: ${COMPANY_INFO.phone}`, centerX, yPosition + 100, { align: 'center' })
+     .text(`Email: ${COMPANY_INFO.email} | Website: ${COMPANY_INFO.website}`, centerX, yPosition + 113, { align: 'center' });
+  
+  // Draw separator line
+  doc.moveTo(50, yPosition + 130)
+     .lineTo(doc.page.width - 50, yPosition + 130)
+     .strokeColor('#e2e8f0')
+     .lineWidth(1)
+     .stroke();
+  
+  return yPosition + 140;
+}
+
+// Function to draw company footer
+function drawCompanyFooter(doc, yPosition) {
+  const centerX = doc.page.width / 2;
+  
+  // Draw footer separator line
+  doc.moveTo(50, yPosition)
+     .lineTo(doc.page.width - 50, yPosition)
+     .strokeColor('#e2e8f0')
+     .lineWidth(1)
+     .stroke();
+  
+  doc.y = yPosition + 15;
+  
+  // Footer text
+  doc.fillColor('#64748b')
+     .fontSize(8)
+     .font('Helvetica')
+     .text(`${COMPANY_INFO.name} - ${COMPANY_INFO.address}`, centerX, doc.y, { align: 'center' })
+     .text(`Phone: ${COMPANY_INFO.phone} | Email: ${COMPANY_INFO.email}`, centerX, doc.y + 12, { align: 'center' })
+     .text(`Generated on: ${new Date().toLocaleString()} | Inventory Management System v2.0`, centerX, doc.y + 24, { align: 'center' });
+}
+
+// PDF Generation APIs with Professional Layout (Single Page) with Company Logo
 app.post('/generate-reference-report-pdf', (req, res) => {
   try {
     const { referenceData } = req.body;
@@ -650,7 +745,15 @@ app.post('/generate-reference-report-pdf', (req, res) => {
     
     const doc = new PDFDocument({ 
       margin: 50,
-      size: 'A4'
+      size: 'A4',
+      info: {
+        Title: 'Reference Report - Rex Enterprise',
+        Author: 'Rex Enterprise Inventory System',
+        Subject: 'Reference Report',
+        Keywords: 'reference, inventory, report, rex enterprise',
+        Creator: 'Rex Enterprise Inventory System',
+        Producer: 'Rex Enterprise PDF Generator'
+      }
     });
     
     const filename = `reference-report-${referenceData.reportNumber || Date.now()}.pdf`;
@@ -660,38 +763,23 @@ app.post('/generate-reference-report-pdf', (req, res) => {
     
     doc.pipe(res);
     
-    // Header with company info
-    doc.fillColor('#3b82f6')
-       .fontSize(24)
-       .text('REFERENCE REPORT', { align: 'center' });
+    // Draw company header with logo
+    let currentY = drawCompanyHeader(doc, 30);
     
-    doc.moveDown(0.5);
-    
-    // Company Information
+    // Report title
     doc.fillColor('#1e293b')
-       .fontSize(10)
-       .text('Inventory Management System', { align: 'center' })
-       .text('Professional Inventory Solutions', { align: 'center' })
-       .text('Email: support@inventory-system.com', { align: 'center' });
+       .fontSize(20)
+       .font('Helvetica-Bold')
+       .text('REFERENCE REPORT', { align: 'center' })
+       .moveDown(1);
     
-    doc.moveDown(1);
-    
-    // Draw separator line
-    doc.moveTo(50, doc.y)
-       .lineTo(550, doc.y)
-       .strokeColor('#e2e8f0')
-       .lineWidth(1)
-       .stroke();
-    
-    doc.moveDown(1);
-    
-    // Reference details in two columns
+    // Reference details
     const leftColumn = 50;
     const rightColumn = 300;
     
     doc.fillColor('#1e293b')
-       .fontSize(12)
-       .text('Reference Number:', leftColumn, doc.y, { continued: true })
+       .fontSize(11)
+       .text('Report Number:', leftColumn, doc.y, { continued: true })
        .fillColor('#3b82f6')
        .font('Helvetica-Bold')
        .text(` ${referenceData.reportNumber || 'REF-N/A'}`)
@@ -703,9 +791,14 @@ app.post('/generate-reference-report-pdf', (req, res) => {
        .text(` ${referenceData.date || new Date().toLocaleDateString()}`)
        
        .fillColor('#1e293b')
-       .text('Generated By:', rightColumn, doc.y - 40, { continued: true })
+       .text('Prepared For:', leftColumn, doc.y + 40, { continued: true })
        .fillColor('#64748b')
-       .text(' Inventory System');
+       .text(` ${referenceData.customer || 'Internal Reference'}`)
+       
+       .fillColor('#1e293b')
+       .text('Prepared By:', rightColumn, doc.y - 60, { continued: true })
+       .fillColor('#64748b')
+       .text(` ${referenceData.createdBy || 'Rex Enterprise'}`);
     
     doc.moveDown(2);
     
@@ -720,12 +813,12 @@ app.post('/generate-reference-report-pdf', (req, res) => {
        .font('Helvetica-Bold')
        .text('Item Description', 55, tableTop + 8)
        .text('SKU', 200, tableTop + 8)
-       .text('Qty', 350, tableTop + 8)
-       .text('Unit Price', 400, tableTop + 8)
-       .text('Total', 470, tableTop + 8);
+       .text('Qty', 300, tableTop + 8)
+       .text('Unit Price', 350, tableTop + 8)
+       .text('Total', 450, tableTop + 8);
     
     let yPosition = tableTop + 35;
-    let itemsPerPage = 15; // Limit items to fit on one page
+    let itemsPerPage = 12; // Reduced to fit header and footer
     const displayItems = referenceData.items.slice(0, itemsPerPage);
     
     // Reference items
@@ -747,9 +840,9 @@ app.post('/generate-reference-report-pdf', (req, res) => {
          .fontSize(9)
          .text(item.name || 'Unnamed Item', 55, yPosition)
          .text(item.sku || 'N/A', 200, yPosition)
-         .text(quantity.toString(), 350, yPosition)
-         .text(`RM ${unitPrice.toFixed(2)}`, 400, yPosition)
-         .text(`RM ${itemTotal.toFixed(2)}`, 470, yPosition);
+         .text(quantity.toString(), 300, yPosition)
+         .text(`RM ${unitPrice.toFixed(2)}`, 350, yPosition)
+         .text(`RM ${itemTotal.toFixed(2)}`, 450, yPosition);
       
       // Item details
       doc.fillColor('#64748b')
@@ -782,13 +875,11 @@ app.post('/generate-reference-report-pdf', (req, res) => {
        .fillColor('#3b82f6')
        .text(` RM ${(referenceData.total || 0).toFixed(2)}`, { align: 'right' });
     
-    // Footer
-    const footerY = Math.min(totalY + 50, 700);
-    doc.y = footerY;
-    doc.fillColor('#64748b')
-       .fontSize(8)
-       .text('This is a computer-generated reference report for internal use.', { align: 'center' })
-       .text(`Generated on: ${new Date().toLocaleString()} | Inventory Management System v2.0`, { align: 'center' });
+    // Add footer space
+    const footerSpace = 50;
+    
+    // Draw company footer
+    drawCompanyFooter(doc, Math.min(totalY + 40, 700 - footerSpace));
     
     doc.end();
     
@@ -808,7 +899,15 @@ app.post('/generate-purchase-pdf', (req, res) => {
     
     const doc = new PDFDocument({ 
       margin: 50,
-      size: 'A4'
+      size: 'A4',
+      info: {
+        Title: 'Purchase Order - Rex Enterprise',
+        Author: 'Rex Enterprise Inventory System',
+        Subject: 'Purchase Order',
+        Keywords: 'purchase, order, inventory, rex enterprise',
+        Creator: 'Rex Enterprise Inventory System',
+        Producer: 'Rex Enterprise PDF Generator'
+      }
     });
     
     const filename = `purchase-order-${purchaseData.purchaseNumber || Date.now()}.pdf`;
@@ -818,29 +917,15 @@ app.post('/generate-purchase-pdf', (req, res) => {
     
     doc.pipe(res);
     
-    // Header
-    doc.fillColor('#10b981')
-       .fontSize(24)
-       .text('PURCHASE ORDER', { align: 'center' });
+    // Draw company header with logo
+    let currentY = drawCompanyHeader(doc, 30);
     
-    doc.moveDown(0.5);
-    
-    // Company Information
+    // Purchase title
     doc.fillColor('#1e293b')
-       .fontSize(10)
-       .text('Inventory Management System', { align: 'center' })
-       .text('Stock Procurement Department', { align: 'center' });
-    
-    doc.moveDown(1);
-    
-    // Draw separator line
-    doc.moveTo(50, doc.y)
-       .lineTo(550, doc.y)
-       .strokeColor('#e2e8f0')
-       .lineWidth(1)
-       .stroke();
-    
-    doc.moveDown(1);
+       .fontSize(20)
+       .font('Helvetica-Bold')
+       .text('PURCHASE ORDER', { align: 'center' })
+       .moveDown(1);
     
     // Purchase details
     const leftColumn = 50;
@@ -860,9 +945,14 @@ app.post('/generate-purchase-pdf', (req, res) => {
        .text(` ${purchaseData.date || new Date().toLocaleDateString()}`)
        
        .fillColor('#1e293b')
-       .text('Supplier:', rightColumn, doc.y - 40, { continued: true })
+       .text('Supplier:', leftColumn, doc.y + 40, { continued: true })
        .fillColor('#64748b')
-       .text(` ${purchaseData.supplier || 'N/A'}`);
+       .text(` ${purchaseData.supplier || 'N/A'}`)
+       
+       .fillColor('#1e293b')
+       .text('Prepared By:', rightColumn, doc.y - 60, { continued: true })
+       .fillColor('#64748b')
+       .text(` ${purchaseData.createdBy || 'Rex Enterprise'}`);
     
     doc.moveDown(2);
     
@@ -883,7 +973,7 @@ app.post('/generate-purchase-pdf', (req, res) => {
     
     let yPosition = tableTop + 35;
     let totalCost = 0;
-    let itemsPerPage = 15;
+    let itemsPerPage = 12;
     const displayItems = purchaseData.items.slice(0, itemsPerPage);
     
     // Purchase items
@@ -932,17 +1022,15 @@ app.post('/generate-purchase-pdf', (req, res) => {
     doc.fillColor('#1e293b')
        .fontSize(12)
        .font('Helvetica-Bold')
-       .text('Total Cost:', 350, totalY + 10, { continued: true })
+       .text('Total Amount:', 350, totalY + 10, { continued: true })
        .fillColor('#10b981')
        .text(` RM ${totalCost.toFixed(2)}`, { align: 'right' });
     
-    // Footer
-    const footerY = Math.min(totalY + 50, 700);
-    doc.y = footerY;
-    doc.fillColor('#64748b')
-       .fontSize(8)
-       .text('Purchase Order - Inventory Management System', { align: 'center' })
-       .text(`Generated on: ${new Date().toLocaleString()}`, { align: 'center' });
+    // Add footer space
+    const footerSpace = 50;
+    
+    // Draw company footer
+    drawCompanyFooter(doc, Math.min(totalY + 40, 700 - footerSpace));
     
     doc.end();
     
@@ -962,7 +1050,15 @@ app.post('/generate-sales-pdf', (req, res) => {
     
     const doc = new PDFDocument({ 
       margin: 50,
-      size: 'A4'
+      size: 'A4',
+      info: {
+        Title: 'Sales Invoice - Rex Enterprise',
+        Author: 'Rex Enterprise Inventory System',
+        Subject: 'Sales Invoice',
+        Keywords: 'sales, invoice, inventory, rex enterprise',
+        Creator: 'Rex Enterprise Inventory System',
+        Producer: 'Rex Enterprise PDF Generator'
+      }
     });
     
     const filename = `sales-invoice-${salesData.salesNumber || Date.now()}.pdf`;
@@ -972,29 +1068,15 @@ app.post('/generate-sales-pdf', (req, res) => {
     
     doc.pipe(res);
     
-    // Header
-    doc.fillColor('#ef4444')
-       .fontSize(24)
-       .text('SALES INVOICE', { align: 'center' });
+    // Draw company header with logo
+    let currentY = drawCompanyHeader(doc, 30);
     
-    doc.moveDown(0.5);
-    
-    // Company Information
+    // Sales title
     doc.fillColor('#1e293b')
-       .fontSize(10)
-       .text('Inventory Management System', { align: 'center' })
-       .text('Sales Department', { align: 'center' });
-    
-    doc.moveDown(1);
-    
-    // Draw separator line
-    doc.moveTo(50, doc.y)
-       .lineTo(550, doc.y)
-       .strokeColor('#e2e8f0')
-       .lineWidth(1)
-       .stroke();
-    
-    doc.moveDown(1);
+       .fontSize(20)
+       .font('Helvetica-Bold')
+       .text('SALES INVOICE', { align: 'center' })
+       .moveDown(1);
     
     // Sales details
     const leftColumn = 50;
@@ -1002,21 +1084,26 @@ app.post('/generate-sales-pdf', (req, res) => {
     
     doc.fillColor('#1e293b')
        .fontSize(11)
-       .text('Sales Number:', leftColumn, doc.y, { continued: true })
+       .text('Invoice Number:', leftColumn, doc.y, { continued: true })
        .fillColor('#ef4444')
        .font('Helvetica-Bold')
        .text(` ${salesData.salesNumber || 'SAL-N/A'}`)
        
        .fillColor('#1e293b')
        .font('Helvetica')
-       .text('Sale Date:', leftColumn, doc.y + 20, { continued: true })
+       .text('Invoice Date:', leftColumn, doc.y + 20, { continued: true })
        .fillColor('#64748b')
        .text(` ${salesData.date || new Date().toLocaleDateString()}`)
        
        .fillColor('#1e293b')
-       .text('Customer:', rightColumn, doc.y - 40, { continued: true })
+       .text('Customer:', leftColumn, doc.y + 40, { continued: true })
        .fillColor('#64748b')
-       .text(` ${salesData.customer || 'N/A'}`);
+       .text(` ${salesData.customer || 'N/A'}`)
+       
+       .fillColor('#1e293b')
+       .text('Prepared By:', rightColumn, doc.y - 60, { continued: true })
+       .fillColor('#64748b')
+       .text(` ${salesData.createdBy || 'Rex Enterprise'}`);
     
     doc.moveDown(2);
     
@@ -1036,7 +1123,7 @@ app.post('/generate-sales-pdf', (req, res) => {
        .text('Total', 450, tableTop + 8);
     
     let yPosition = tableTop + 35;
-    let itemsPerPage = 15;
+    let itemsPerPage = 12;
     const displayItems = salesData.items.slice(0, itemsPerPage);
     
     // Sales items
@@ -1088,14 +1175,17 @@ app.post('/generate-sales-pdf', (req, res) => {
        .fillColor('#ef4444')
        .text(` RM ${(salesData.total || 0).toFixed(2)}`, { align: 'right' });
     
-    // Footer
-    const footerY = Math.min(totalY + 50, 700);
-    doc.y = footerY;
+    // Add thank you message
     doc.fillColor('#64748b')
-       .fontSize(8)
-       .text('Thank you for your purchase!', { align: 'center' })
-       .text('Sales Invoice - Inventory Management System', { align: 'center' })
-       .text(`Generated on: ${new Date().toLocaleString()}`, { align: 'center' });
+       .fontSize(10)
+       .font('Helvetica-Italic')
+       .text('Thank you for your business!', 50, totalY + 40);
+    
+    // Add footer space
+    const footerSpace = 50;
+    
+    // Draw company footer
+    drawCompanyFooter(doc, Math.min(totalY + 60, 700 - footerSpace));
     
     doc.end();
     
@@ -1115,7 +1205,15 @@ app.post('/generate-inventory-report-pdf', (req, res) => {
     
     const doc = new PDFDocument({ 
       margin: 50,
-      size: 'A4'
+      size: 'A4',
+      info: {
+        Title: 'Inventory Report - Rex Enterprise',
+        Author: 'Rex Enterprise Inventory System',
+        Subject: 'Inventory Report',
+        Keywords: 'inventory, report, stock, rex enterprise',
+        Creator: 'Rex Enterprise Inventory System',
+        Producer: 'Rex Enterprise PDF Generator'
+      }
     });
     
     const filename = `inventory-report-${reportData.id || Date.now()}.pdf`;
@@ -1125,29 +1223,20 @@ app.post('/generate-inventory-report-pdf', (req, res) => {
     
     doc.pipe(res);
     
-    // Header
-    doc.fillColor('#06b6d4')
-       .fontSize(24)
-       .text('INVENTORY REPORT', { align: 'center' });
+    // Draw company header with logo
+    let currentY = drawCompanyHeader(doc, 30);
     
-    doc.moveDown(0.5);
-    
-    // Company Information
+    // Report title
     doc.fillColor('#1e293b')
-       .fontSize(10)
-       .text('Inventory Management System', { align: 'center' })
-       .text('Comprehensive Stock Analysis', { align: 'center' });
+       .fontSize(20)
+       .font('Helvetica-Bold')
+       .text('INVENTORY REPORT', { align: 'center' })
+       .moveDown(0.5);
     
-    doc.moveDown(1);
-    
-    // Draw separator line
-    doc.moveTo(50, doc.y)
-       .lineTo(550, doc.y)
-       .strokeColor('#e2e8f0')
-       .lineWidth(1)
-       .stroke();
-    
-    doc.moveDown(1);
+    doc.fillColor('#64748b')
+       .fontSize(11)
+       .text('Comprehensive Stock Analysis Report', { align: 'center' })
+       .moveDown(1);
     
     // Report details
     const leftColumn = 50;
@@ -1156,10 +1245,12 @@ app.post('/generate-inventory-report-pdf', (req, res) => {
     doc.fillColor('#1e293b')
        .fontSize(11)
        .text('Report ID:', leftColumn, doc.y, { continued: true })
-       .fillColor('#64748b')
-       .text(` ${reportData.id || 'N/A'}`)
+       .fillColor('#3b82f6')
+       .font('Helvetica-Bold')
+       .text(` ${reportData.id || 'REP-N/A'}`)
        
        .fillColor('#1e293b')
+       .font('Helvetica')
        .text('Generated:', leftColumn, doc.y + 20, { continued: true })
        .fillColor('#64748b')
        .text(` ${reportData.date || new Date().toLocaleDateString()}`)
@@ -1175,9 +1266,9 @@ app.post('/generate-inventory-report-pdf', (req, res) => {
        .text(` ${reportData.items.length}`)
        
        .fillColor('#1e293b')
-       .text('Report Type:', rightColumn, doc.y + 20, { continued: true })
+       .text('Prepared By:', rightColumn, doc.y + 20, { continued: true })
        .fillColor('#64748b')
-       .text(' Comprehensive Inventory');
+       .text(` ${reportData.createdBy || 'Rex Enterprise'}`);
     
     doc.moveDown(2);
     
@@ -1203,7 +1294,7 @@ app.post('/generate-inventory-report-pdf', (req, res) => {
     let totalInventoryValue = 0;
     let totalPotentialValue = 0;
     let totalItems = 0;
-    let itemsPerPage = 20;
+    let itemsPerPage = 18; // Reduced for footer space
     const displayItems = reportData.items.slice(0, itemsPerPage);
     
     // Inventory items
@@ -1250,7 +1341,7 @@ app.post('/generate-inventory-report-pdf', (req, res) => {
     }
     
     // Summary section
-    const summaryY = Math.min(yPosition + 30, 650);
+    const summaryY = Math.min(yPosition + 20, 600);
     
     // Summary box
     doc.fillColor('#f8fafc')
@@ -1293,13 +1384,11 @@ app.post('/generate-inventory-report-pdf', (req, res) => {
        .fillColor('#3b82f6')
        .text(` RM ${(totalPotentialValue - totalInventoryValue).toFixed(2)}`);
     
-    // Footer
-    doc.y = summaryY + 120;
-    doc.fillColor('#64748b')
-       .fontSize(8)
-       .text('Confidential Inventory Report - For Internal Use Only', { align: 'center' })
-       .text('Inventory Management System | Professional Stock Analysis', { align: 'center' })
-       .text(`Generated on: ${new Date().toLocaleString()} | Page 1 of 1`, { align: 'center' });
+    // Add footer space
+    const footerSpace = 50;
+    
+    // Draw company footer
+    drawCompanyFooter(doc, Math.min(summaryY + 120, 700 - footerSpace));
     
     doc.end();
     
@@ -1309,14 +1398,14 @@ app.post('/generate-inventory-report-pdf', (req, res) => {
   }
 });
 
-// HTML Page Templates
+// HTML Page Templates - Updated with Rex Enterprise Branding
 function getLoginPage() {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Login | Inventory System</title>
+  <title>Login | Rex Enterprise Inventory System</title>
   <style>${getCSS()}</style>
 </head>
 <body>
@@ -1325,7 +1414,7 @@ function getLoginPage() {
     <div class="auth-content">
       <div class="auth-header">
         <div class="logo">📦</div>
-        <h1 class="main-title">INVENTORY WITH INVOICE SYSTEM</h1>
+        <h1 class="main-title">REX ENTERPRISE</h1>
         <p class="subtitle">Complete Inventory Management Solution</p>
       </div>
       
@@ -1395,7 +1484,7 @@ function getRegisterPage() {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Register | Inventory System</title>
+  <title>Register | Rex Enterprise Inventory System</title>
   <style>${getCSS()}</style>
 </head>
 <body>
@@ -1404,7 +1493,7 @@ function getRegisterPage() {
     <div class="auth-content">
       <div class="auth-header">
         <div class="logo">📦</div>
-        <h1 class="main-title">INVENTORY WITH INVOICE SYSTEM</h1>
+        <h1 class="main-title">REX ENTERPRISE</h1>
         <p class="subtitle">Create Your Account</p>
       </div>
       
@@ -1480,13 +1569,13 @@ function getDashboardPage() {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Dashboard | Inventory System</title>
+  <title>Dashboard | Rex Enterprise Inventory System</title>
   <style>${getCSS()}</style>
 </head>
 <body>
   <div class="container">
     <div class="topbar">
-      <h2>📦 Inventory Dashboard</h2>
+      <h2>📦 Rex Enterprise Dashboard</h2>
       <div class="topbar-actions">
         <span class="welcome-text">Welcome, <strong id="username"></strong></span>
         <button class="btn small ghost" onclick="toggleTheme()">🌓</button>
@@ -1631,7 +1720,7 @@ function getDashboardPage() {
     </div>
   </div>
 
-  <footer>© 2025 Inventory Management System | Rex_Ho</footer>
+  <footer>© 2025 Rex Enterprise Inventory Management System</footer>
 
   <script>${getJavaScript()}</script>
   <script>
@@ -2020,7 +2109,7 @@ function getReferencePage() {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Generate Reference Report | Inventory System</title>
+  <title>Generate Reference Report | Rex Enterprise Inventory System</title>
   <style>${getCSS()}</style>
 </head>
 <body>
@@ -2060,7 +2149,7 @@ function getReferencePage() {
     </div>
   </div>
 
-  <footer>© 2025 Inventory Management System | Rex_Ho</footer>
+  <footer>© 2025 Rex Enterprise Inventory Management System</footer>
 
   <script>${getJavaScript()}</script>
   <script>
@@ -2251,7 +2340,7 @@ function getPurchasePage() {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Purchase | Inventory System</title>
+  <title>Purchase | Rex Enterprise Inventory System</title>
   <style>${getCSS()}</style>
 </head>
 <body>
@@ -2299,7 +2388,7 @@ function getPurchasePage() {
     </div>
   </div>
 
-  <footer>© 2025 Inventory Management System | Rex_Ho</footer>
+  <footer>© 2025 Rex Enterprise Inventory Management System</footer>
 
   <script>${getJavaScript()}</script>
   <script>
@@ -2502,7 +2591,7 @@ function getSalesPage() {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sales | Inventory System</title>
+  <title>Sales | Rex Enterprise Inventory System</title>
   <style>${getCSS()}</style>
 </head>
 <body>
@@ -2550,7 +2639,7 @@ function getSalesPage() {
     </div>
   </div>
 
-  <footer>© 2025 Inventory Management System | Rex_Ho</footer>
+  <footer>© 2025 Rex Enterprise Inventory Management System</footer>
 
   <script>${getJavaScript()}</script>
   <script>
@@ -2758,7 +2847,7 @@ function getStatementPage() {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Statement | Inventory System</title>
+  <title>Statement | Rex Enterprise Inventory System</title>
   <style>${getCSS()}</style>
 </head>
 <body>
@@ -2794,7 +2883,7 @@ function getStatementPage() {
 
   </div>
 
-  <footer>© 2025 Inventory Management System | Rex_Ho</footer>
+  <footer>© 2025 Rex Enterprise Inventory Management System</footer>
 
   <script>${getJavaScript()}</script>
   <script>
@@ -3173,7 +3262,7 @@ function getSettingsPage() {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Account Settings | Inventory System</title>
+  <title>Account Settings | Rex Enterprise Inventory System</title>
   <style>${getCSS()}</style>
 </head>
 <body>
@@ -3221,7 +3310,7 @@ function getSettingsPage() {
     </div>
   </div>
 
-  <footer>© 2025 Inventory Management System | Rex_Ho</footer>
+  <footer>© 2025 Rex Enterprise Inventory Management System</footer>
 
   <script>${getJavaScript()}</script>
   <script>
@@ -3818,11 +3907,16 @@ function getJavaScript() {
 }
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log('🚀 Complete single-file server running on port ' + PORT);
+  console.log('🚀 Rex Enterprise Inventory System running on port ' + PORT);
   console.log('📊 MongoDB: ' + MONGODB_URI);
   console.log('🔐 Security Code: ' + VALID_SECURITY_CODE);
+  console.log('🏢 Company: ' + COMPANY_INFO.name);
+  console.log('📞 Contact: ' + COMPANY_INFO.phone);
   console.log('🌐 Main URL: http://localhost:' + PORT + '/');
   console.log('✅ ALL FEATURES INCLUDED:');
+  console.log('   ✅ Company Branding: Rex Enterprise');
+  console.log('   ✅ Professional Logo in All PDFs');
+  console.log('   ✅ Updated Footer with Company Info (Center Aligned)');
   console.log('   ✅ User Authentication (Login/Register) - FIXED');
   console.log('   ✅ Complete Inventory Management with Edit/Delete');
   console.log('   ✅ Search & Date Range Filter for Inventory');
