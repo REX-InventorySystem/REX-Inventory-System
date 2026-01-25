@@ -13,12 +13,11 @@ let db;
 
 // Company Information
 const COMPANY_INFO = {
-  name: "Rex Enterprise",
+  name: "TRex Enterprise",
   address: "123 Business Street, Kuala Lumpur, Malaysia",
   phone: "+60 12-345 6789",
-  email: "info@rexenterprise.com",
-  website: "www.rexenterprise.com",
-  logoText: "🏢 REX ENTERPRISE"
+  email: "info@trexenterprise.com",
+  logoText: "🏢 TREX ENTERPRISE"
 };
 
 // Middleware
@@ -661,7 +660,7 @@ function drawCompanyHeader(doc) {
   doc.fillColor('#ffffff')
      .fontSize(24)
      .font('Helvetica-Bold')
-     .text('REX ENTERPRISE', 60, 55);
+     .text('TREX ENTERPRISE', 60, 55);
   
   // Company tagline
   doc.fillColor('#dbeafe')
@@ -676,7 +675,6 @@ function drawCompanyHeader(doc) {
      .text(COMPANY_INFO.address, 350, 60, { align: 'right' })
      .text(`Phone: ${COMPANY_INFO.phone}`, 350, 70, { align: 'right' })
      .text(`Email: ${COMPANY_INFO.email}`, 350, 80, { align: 'right' })
-     .text(`Website: ${COMPANY_INFO.website}`, 350, 90, { align: 'right' });
   
   return 110; // Return the Y position after header
 }
