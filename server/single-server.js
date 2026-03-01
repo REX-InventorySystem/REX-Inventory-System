@@ -1,6 +1,7 @@
 const express = require('express');
 const { MongoClient, ObjectId } = require('mongodb');
 const PDFDocument = require('pdfkit');
+const QRCode = require('qrcode');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -708,7 +709,7 @@ function addFooter(doc, pageBottom = 750) {
      });
 }
 
-// PDF Generation APIs with Professional Layout (Single Page) - UPDATED WITH BOTTOM CENTER FOOTER
+// PDF Generation APIs with Professional Layout (Single Page)
 app.post('/generate-reference-report-pdf', (req, res) => {
   try {
     const { referenceData } = req.body;
@@ -1013,13 +1014,17 @@ app.post('/generate-purchase-pdf', (req, res) => {
   }
 });
 
-app.post('/generate-sales-pdf', (req, res) => {
+app.post('/generate-sales-pdf', async (req, res) => {
   try {
     const { salesData } = req.body;
     
     if (!salesData || !salesData.items || !Array.isArray(salesData.items)) {
       return res.status(400).json({ error: 'Invalid sales data' });
     }
+
+    // Generate Verification QR Code Buffer
+    const qrText = `Verification Complete\nInvoice Number: ${salesData.salesNumber || 'SAL-N/A'}\nDate: ${salesData.date || new Date().toLocaleDateString()}`;
+    const qrBuffer = await QRCode.toBuffer(qrText, { type: 'png', margin: 1 });
     
     const doc = new PDFDocument({ 
       margin: 50,
@@ -1055,34 +1060,44 @@ app.post('/generate-sales-pdf', (req, res) => {
     
     doc.moveDown(1);
     
-    // Sales details
+    // Sales details with QR Code included on the right
     const leftColumn = 50;
-    const rightColumn = 300;
+    const rightColumn = 250;
+    const detailStartY = doc.y;
     
     doc.fillColor('#1e293b')
        .fontSize(11)
        .font('Helvetica')
-       .text('Sales Number:', leftColumn, doc.y, { continued: true })
+       .text('Sales Number:', leftColumn, detailStartY, { continued: true })
        .fillColor('#ef4444')
        .font('Helvetica-Bold')
        .text(` ${salesData.salesNumber || 'SAL-N/A'}`)
        
        .fillColor('#1e293b')
        .font('Helvetica')
-       .text('Sale Date:', leftColumn, doc.y + 20, { continued: true })
+       .text('Sale Date:', leftColumn, detailStartY + 20, { continued: true })
        .fillColor('#64748b')
        .text(` ${salesData.date || new Date().toLocaleDateString()}`)
        
        .fillColor('#1e293b')
-       .text('Customer:', rightColumn, doc.y - 40, { continued: true })
+       .text('Customer:', rightColumn, detailStartY, { continued: true })
        .fillColor('#64748b')
        .text(` ${salesData.customer || 'N/A'}`)
        
        .fillColor('#1e293b')
-       .text('Issued By:', rightColumn, doc.y + 20, { continued: true })
+       .text('Issued By:', rightColumn, detailStartY + 20, { continued: true })
        .fillColor('#64748b')
        .text(` ${salesData.createdBy || 'Inventory System'}`);
+
+    // Embed QR Code for scanning
+    doc.image(qrBuffer, 460, detailStartY - 5, { width: 60 });
+    doc.fillColor('#64748b')
+       .fontSize(6)
+       .font('Helvetica-Bold')
+       .text('SCAN TO VERIFY', 460, detailStartY + 58, { width: 60, align: 'center' });
     
+    // Reset Y position to comfortably continue after the details and QR code block
+    doc.y = detailStartY + 60;
     doc.moveDown(2);
     
     // Table header
@@ -1554,7 +1569,6 @@ function getDashboardPage() {
       </div>
     </div>
 
-    <!-- Login History Section -->
     <div class="card">
       <div class="card-header">
         <h3>📊 System Login History</h3>
@@ -1565,7 +1579,6 @@ function getDashboardPage() {
       </div>
     </div>
 
-    <!-- Total Values Summary -->
     <div class="card">
       <h3>💰 Inventory Value Summary</h3>
       <div class="value-summary">
@@ -1613,7 +1626,6 @@ function getDashboardPage() {
         </div>
       </div>
 
-      <!-- Search and Filter Section -->
       <div class="search-section">
         <div class="form-row">
           <label style="flex: 2;">
@@ -1663,7 +1675,6 @@ function getDashboardPage() {
     </div>
   </div>
 
-  <!-- Edit Item Modal -->
   <div id="editModal" class="modal">
     <div class="modal-content">
       <div class="modal-header">
@@ -3883,25 +3894,15 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('🔐 Security Code: ' + VALID_SECURITY_CODE);
   console.log('🌐 Main URL: http://localhost:' + PORT + '/');
   console.log('✅ ALL FEATURES INCLUDED:');
-  console.log('   ✅ User Authentication (Login/Register) - FIXED');
+  console.log('   ✅ User Authentication (Login/Register)');
   console.log('   ✅ Complete Inventory Management with Edit/Delete');
   console.log('   ✅ Search & Date Range Filter for Inventory');
   console.log('   ✅ Purchase (Stock In) with Search & Automatic PDF Download');
   console.log('   ✅ Sales (Stock Out) with Search & Automatic PDF Download');
   console.log('   ✅ Reference Report Generation with PDF');
-  console.log('   ✅ Statements & Reports with History - FIXED');
+  console.log('   ✅ Statements & Reports with History');
+  console.log('   ✅ Sales Invoices now include Scannable Verification QR Code 📱');
   console.log('   ✅ Account Settings & Password Management');
-  console.log('   ✅ Dark/Light Theme Toggle');
-  console.log('   ✅ Responsive Design for Mobile');
-  console.log('   ✅ Enhanced Login History with All Users');
-  console.log('   ✅ Professional PDF Layout Design with Company Logo (Single Page)');
-  console.log('   ✅ Security Code for Account Deletion');
-  console.log('   ✅ Inventory Value Summary');
-  console.log('   ✅ Date Range Specific Inventory Reports');
-  console.log('   ✅ Preserved Inventory Data on Account Deletion');
-  console.log('   ✅ Complete Multi-User System');
-  console.log('   ✅ Enterprise-Level Inventory Management');
-  console.log('   ✅ Sequential Numbering System: REF-0000000000001, PUR-0000000000001, SAL-0000000000001');
-  console.log('   ✅ Company: ' + COMPANY_INFO.name + ' integrated into all pages and PDFs');
-  console.log('   ✅ PDF Footer Position: All PDFs now have footer at bottom center of page');
+  console.log('   ✅ Professional PDF Layout Design with Company Logo');
+  console.log('   ✅ PDF Footer Position: bottom center of page');
 });
