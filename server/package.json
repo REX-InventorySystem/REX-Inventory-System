@@ -1,7 +1,7 @@
 {
   "name": "inventory-system-server",
-  "version": "2.1.0",
-  "description": "Complete Inventory Management System with QR Code Integration, Fixed Login & Statements and Bottom-Center PDF Footer",
+  "version": "2.2.0",
+  "description": "Complete Inventory Management System with QR Code Integration, Fixed Layouts, and Rex Enterprise Branding",
   "main": "single-server.js",
   "scripts": {
     "start": "node single-server.js",
