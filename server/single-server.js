@@ -1,7 +1,7 @@
 const express = require('express');
 const { MongoClient, ObjectId } = require('mongodb');
 const PDFDocument = require('pdfkit');
-const QRCode = require('qrcode'); // Added QR Code library
+const QRCode = require('qrcode');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -53,15 +53,255 @@ app.get('/', (req, res) => {
     case 'sales':
       htmlContent = getSalesPage();
       break;
-    case 'view-doc':
-      htmlContent = getViewDocPage(); // Added route for viewing scanned documents
-      break;
     default:
       htmlContent = getLoginPage();
   }
   
   res.send(htmlContent);
 });
+
+// ==========================================
+// QR CODE WEB VIEW ENDPOINTS (Responsive)
+// ==========================================
+
+app.get('/view/sale/:id', async (req, res) => {
+  try {
+    const docData = await db.collection('sales').findOne({ _id: new ObjectId(req.params.id) });
+    if (!docData) return res.status(404).send('Document not found');
+    res.send(getDocumentViewHTML('SALES INVOICE', docData, COMPANY_INFO, 'sale'));
+  } catch (error) {
+    res.status(500).send('Error loading document view');
+  }
+});
+
+app.get('/view/purchase/:id', async (req, res) => {
+  try {
+    const docData = await db.collection('purchases').findOne({ _id: new ObjectId(req.params.id) });
+    if (!docData) return res.status(404).send('Document not found');
+    res.send(getDocumentViewHTML('PURCHASE ORDER', docData, COMPANY_INFO, 'purchase'));
+  } catch (error) {
+    res.status(500).send('Error loading document view');
+  }
+});
+
+app.get('/view/reference/:id', async (req, res) => {
+  try {
+    const docData = await db.collection('reference_reports').findOne({ _id: new ObjectId(req.params.id) });
+    if (!docData) return res.status(404).send('Document not found');
+    res.send(getDocumentViewHTML('REFERENCE REPORT', docData, COMPANY_INFO, 'reference'));
+  } catch (error) {
+    res.status(500).send('Error loading document view');
+  }
+});
+
+app.get('/view/inventory-report/:id', async (req, res) => {
+  try {
+    const docData = await db.collection('statements').findOne({ _id: new ObjectId(req.params.id) });
+    if (!docData) return res.status(404).send('Document not found');
+    res.send(getInventoryReportViewHTML(docData, COMPANY_INFO));
+  } catch (error) {
+    res.status(500).send('Error loading document view');
+  }
+});
+
+// HTML Generators for QR Scans
+function getDocumentViewHTML(title, docData, companyInfo, type) {
+  let itemsHtml = '';
+  let totalValue = docData.total || 0;
+  let docNumber = docData.salesNumber || docData.purchaseNumber || docData.reportNumber;
+  let entityLabel = type === 'sale' ? 'Customer' : type === 'purchase' ? 'Supplier' : '';
+  let entityName = docData.customer || docData.supplier || '';
+
+  docData.items.forEach(item => {
+     let qty = item.quantity || item.invoiceQty || 1;
+     let price = item.unitPrice || item.unitCost || 0;
+     let itemTotal = qty * price;
+     itemsHtml += `
+       <div class="item-row">
+         <div class="item-info">
+           <div class="item-name">${item.name} <span class="item-sku">(${item.sku})</span></div>
+           <div class="item-meta">Qty: ${qty} x RM ${price.toFixed(2)}</div>
+         </div>
+         <div class="item-total">RM ${itemTotal.toFixed(2)}</div>
+       </div>
+     `;
+  });
+
+  return `<!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>${title} | ${companyInfo.name}</title>
+      <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f8fafc; margin: 0; padding: 20px; color: #1e293b; }
+        .container { max-width: 800px; margin: 0 auto; background: #fff; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
+        .header { text-align: center; border-bottom: 2px solid #e2e8f0; padding-bottom: 20px; margin-bottom: 20px; }
+        .company-name { font-size: 26px; font-weight: bold; color: #3b82f6; margin-bottom: 5px; }
+        .company-details { font-size: 14px; color: #64748b; line-height: 1.5; }
+        .doc-title { font-size: 22px; font-weight: 800; margin: 25px 0; text-align: center; color: #0f172a; text-transform: uppercase; letter-spacing: 1px; }
+        .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 30px; font-size: 14px; background: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; }
+        .info-label { font-weight: bold; color: #64748b; font-size: 12px; text-transform: uppercase; }
+        .info-value { font-weight: 600; font-size: 15px; margin-top: 4px; color: #1e293b; }
+        .items-section { margin-bottom: 30px; }
+        .items-header { display: flex; font-weight: bold; color: #64748b; font-size: 13px; text-transform: uppercase; padding-bottom: 10px; border-bottom: 2px solid #e2e8f0; margin-bottom: 10px; }
+        .item-row { display: flex; justify-content: space-between; border-bottom: 1px solid #f1f5f9; padding: 12px 0; align-items: center; }
+        .item-info { flex: 1; }
+        .item-name { font-weight: 600; color: #1e293b; }
+        .item-sku { color: #94a3b8; font-size: 12px; margin-left: 5px; font-weight: normal; }
+        .item-meta { color: #64748b; font-size: 13px; margin-top: 6px; }
+        .item-total { font-weight: bold; color: #3b82f6; font-size: 15px; }
+        .total-section { text-align: right; border-top: 2px solid #cbd5e1; padding-top: 20px; font-size: 20px; background: #f8fafc; padding: 15px; border-radius: 8px; }
+        .total-label { font-weight: bold; color: #64748b; margin-right: 15px; font-size: 16px; text-transform: uppercase; }
+        .total-value { font-weight: 800; color: ${type === 'sale' ? '#ef4444' : type === 'purchase' ? '#10b981' : '#3b82f6'}; }
+        .footer { text-align: center; margin-top: 40px; font-size: 12px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 20px; }
+        @media (max-width: 600px) { .info-grid { grid-template-columns: 1fr; } body { padding: 10px; } .container { padding: 15px; } }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <div class="company-name">${companyInfo.logoText}</div>
+          <div class="company-details">${companyInfo.address}<br>${companyInfo.phone} | ${companyInfo.email}</div>
+        </div>
+        <div class="doc-title">${title}</div>
+        <div class="info-grid">
+          <div>
+            <div class="info-label">Document No</div>
+            <div class="info-value" style="color: ${type === 'sale' ? '#ef4444' : type === 'purchase' ? '#10b981' : '#3b82f6'};">${docNumber}</div>
+          </div>
+          <div>
+            <div class="info-label">Date Issued</div>
+            <div class="info-value">${docData.date || new Date(docData.createdAt).toLocaleDateString()}</div>
+          </div>
+          ${entityLabel ? `
+          <div>
+            <div class="info-label">${entityLabel}</div>
+            <div class="info-value">${entityName}</div>
+          </div>` : ''}
+          <div>
+            <div class="info-label">Issued By</div>
+            <div class="info-value">${docData.createdBy || 'System'}</div>
+          </div>
+        </div>
+        <div class="items-section">
+          <div class="items-header">
+            <div style="flex:1">Item Description</div>
+            <div>Total</div>
+          </div>
+          ${itemsHtml}
+        </div>
+        <div class="total-section">
+          <span class="total-label">Grand Total:</span>
+          <span class="total-value">RM ${parseFloat(totalValue).toFixed(2)}</span>
+        </div>
+        <div class="footer">
+          Generated securely by ${companyInfo.name} System<br>
+          ✓ Scanned from verified digital document QR Code
+        </div>
+      </div>
+    </body>
+    </html>`;
+}
+
+function getInventoryReportViewHTML(reportData, companyInfo) {
+  let itemsHtml = '';
+  let totalInventoryValue = 0;
+  let totalPotentialValue = 0;
+  let totalItems = 0;
+
+  reportData.items.forEach((item, index) => {
+     let qty = item.quantity || 0;
+     let cost = item.unitCost || 0;
+     let price = item.unitPrice || 0;
+     totalInventoryValue += (qty * cost);
+     totalPotentialValue += (qty * price);
+     totalItems += qty;
+
+     itemsHtml += `
+       <div class="item-row">
+         <div class="item-info">
+           <div class="item-name">${index + 1}. ${item.name} <span class="item-sku">(${item.sku})</span></div>
+           <div class="item-meta">Category: ${item.category} | Stock: <strong>${qty}</strong> | Cost: RM ${cost.toFixed(2)} | Price: RM ${price.toFixed(2)}</div>
+         </div>
+         <div class="item-total">
+            <div style="color:#ef4444; font-size:13px;">Val: RM ${(qty*cost).toFixed(2)}</div>
+            <div style="color:#10b981; font-size:13px; margin-top:2px;">Pot: RM ${(qty*price).toFixed(2)}</div>
+         </div>
+       </div>
+     `;
+  });
+
+  return `<!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Inventory Report | ${companyInfo.name}</title>
+      <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f8fafc; margin: 0; padding: 20px; color: #1e293b; }
+        .container { max-width: 800px; margin: 0 auto; background: #fff; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
+        .header { text-align: center; border-bottom: 2px solid #e2e8f0; padding-bottom: 20px; margin-bottom: 20px; }
+        .company-name { font-size: 26px; font-weight: bold; color: #3b82f6; margin-bottom: 5px; }
+        .company-details { font-size: 14px; color: #64748b; line-height: 1.5; }
+        .doc-title { font-size: 22px; font-weight: 800; margin: 25px 0; text-align: center; color: #0f172a; text-transform: uppercase; letter-spacing: 1px; }
+        .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 30px; font-size: 14px; background: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; }
+        .info-label { font-weight: bold; color: #64748b; font-size: 12px; text-transform: uppercase; }
+        .info-value { font-weight: 600; font-size: 15px; margin-top: 4px; color: #1e293b; }
+        .items-section { margin-bottom: 30px; }
+        .items-header { display: flex; font-weight: bold; color: #64748b; font-size: 13px; text-transform: uppercase; padding-bottom: 10px; border-bottom: 2px solid #e2e8f0; margin-bottom: 10px; }
+        .item-row { display: flex; justify-content: space-between; border-bottom: 1px solid #f1f5f9; padding: 12px 0; align-items: center; }
+        .item-info { flex: 1; }
+        .item-name { font-weight: 600; color: #1e293b; }
+        .item-sku { color: #94a3b8; font-size: 12px; margin-left: 5px; font-weight: normal; }
+        .item-meta { color: #64748b; font-size: 13px; margin-top: 6px; }
+        .item-total { text-align: right; font-weight: bold; }
+        .summary-box { background: #1e293b; padding: 20px; border-radius: 8px; margin-top: 20px; color: #fff; }
+        .summary-title { margin: 0 0 15px 0; font-size: 18px; color: #3b82f6; border-bottom: 1px solid #334155; padding-bottom: 10px; }
+        .summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+        .sum-label { color: #94a3b8; font-size: 12px; text-transform: uppercase; }
+        .sum-val { font-size: 18px; font-weight: bold; margin-top: 5px; }
+        .footer { text-align: center; margin-top: 40px; font-size: 12px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 20px; }
+        @media (max-width: 600px) { .info-grid, .summary-grid { grid-template-columns: 1fr; } body { padding: 10px; } .container { padding: 15px; } }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <div class="company-name">${companyInfo.logoText}</div>
+          <div class="company-details">${companyInfo.address}<br>${companyInfo.phone} | ${companyInfo.email}</div>
+        </div>
+        <div class="doc-title">INVENTORY REPORT</div>
+        <div class="info-grid">
+          <div><div class="info-label">Report ID</div><div class="info-value" style="color: #06b6d4;">${reportData.id || reportData._id}</div></div>
+          <div><div class="info-label">Generated Date</div><div class="info-value">${reportData.date || new Date().toLocaleDateString()}</div></div>
+          <div><div class="info-label">Date Range</div><div class="info-value">${reportData.dateRange || 'All Items'}</div></div>
+          <div><div class="info-label">Generated By</div><div class="info-value">${reportData.createdBy || 'System'}</div></div>
+        </div>
+        <div class="items-section">
+          <div class="items-header">
+            <div style="flex:1">Item Details</div>
+            <div>Totals</div>
+          </div>
+          ${itemsHtml}
+        </div>
+        <div class="summary-box">
+          <h3 class="summary-title">Inventory Summary</h3>
+          <div class="summary-grid">
+            <div><div class="sum-label">Total Product Types</div><div class="sum-val">${reportData.items.length}</div></div>
+            <div><div class="sum-label">Total Stock Units</div><div class="sum-val">${totalItems}</div></div>
+            <div><div class="sum-label">Total Inventory Value</div><div class="sum-val" style="color:#ef4444;">RM ${totalInventoryValue.toFixed(2)}</div></div>
+            <div><div class="sum-label">Total Potential Value</div><div class="sum-val" style="color:#10b981;">RM ${totalPotentialValue.toFixed(2)}</div></div>
+          </div>
+        </div>
+        <div class="footer">
+          Generated securely by ${companyInfo.name} System<br>
+          ✓ Scanned from verified digital document QR Code
+        </div>
+      </div>
+    </body>
+    </html>`;
+}
 
 // API Routes
 app.get('/health', (req, res) => {
@@ -156,7 +396,7 @@ async function initializeCounters() {
 
 connectDB();
 
-// Authentication APIs
+// Authentication APIs - FIXED
 app.post('/api/login', async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -216,7 +456,7 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
-// Login History API
+// Login History API - Shows all users
 app.get('/api/login-history', async (req, res) => {
   try {
     const user = JSON.parse(req.headers.user || '{}');
@@ -224,6 +464,7 @@ app.get('/api/login-history', async (req, res) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
+    // Get all login history (not just current user)
     const history = await db.collection('login_history')
       .find({})
       .sort({ loginTime: -1 })
@@ -242,6 +483,7 @@ app.get('/api/inventory', async (req, res) => {
     const { search, dateFrom, dateTo } = req.query;
     let query = {};
     
+    // Search functionality
     if (search) {
       query.$or = [
         { sku: { $regex: search, $options: 'i' } },
@@ -250,6 +492,7 @@ app.get('/api/inventory', async (req, res) => {
       ];
     }
     
+    // Date range filter
     if (dateFrom || dateTo) {
       query.createdAt = {};
       if (dateFrom) {
@@ -287,6 +530,7 @@ app.put('/api/inventory/:id', async (req, res) => {
     const { id } = req.params;
     const updateData = { ...req.body };
     
+    // Remove fields that shouldn't be updated
     delete updateData._id;
     delete updateData.createdAt;
     
@@ -319,7 +563,7 @@ app.delete('/api/inventory/:id', async (req, res) => {
   }
 });
 
-// Reference Reports APIs
+// Reference Reports APIs (formerly invoices)
 app.get('/api/reference-reports', async (req, res) => {
   try {
     const referenceReports = await db.collection('reference_reports').find({}).sort({ createdAt: -1 }).toArray();
@@ -396,6 +640,7 @@ app.post('/api/purchases', async (req, res) => {
       createdBy: req.body.createdBy || 'System'
     };
     
+    // Fix: Ensure itemId is properly converted to ObjectId
     purchaseData.items = purchaseData.items.map(item => ({
       ...item,
       itemId: typeof item.itemId === 'string' ? new ObjectId(item.itemId) : item.itemId
@@ -403,6 +648,7 @@ app.post('/api/purchases', async (req, res) => {
     
     const result = await db.collection('purchases').insertOne(purchaseData);
     
+    // Update inventory quantities
     for (const item of purchaseData.items) {
       const existingItem = await db.collection('inventory').findOne({ _id: item.itemId });
       
@@ -479,6 +725,7 @@ app.post('/api/sales', async (req, res) => {
       createdBy: req.body.createdBy || 'System'
     };
     
+    // Fix: Ensure itemId is properly converted to ObjectId
     salesData.items = salesData.items.map(item => ({
       ...item,
       itemId: typeof item.itemId === 'string' ? new ObjectId(item.itemId) : item.itemId
@@ -486,6 +733,7 @@ app.post('/api/sales', async (req, res) => {
     
     const result = await db.collection('sales').insertOne(salesData);
     
+    // Update inventory quantities
     for (const item of salesData.items) {
       const existingItem = await db.collection('inventory').findOne({ _id: item.itemId });
       
@@ -554,7 +802,7 @@ app.delete('/api/sales/:id', async (req, res) => {
   }
 });
 
-// Statements/Reports APIs
+// Statements/Reports APIs - FIXED
 app.get('/api/statements', async (req, res) => {
   try {
     const statements = await db.collection('statements').find({}).sort({ createdAt: -1 }).toArray();
@@ -564,17 +812,15 @@ app.get('/api/statements', async (req, res) => {
   }
 });
 
-// Single Statement Fetch (Added for View Page)
+// Added missing endpoint for fetching a single statement
 app.get('/api/statements/:id', async (req, res) => {
   try {
     const statement = await db.collection('statements').findOne({ 
       _id: new ObjectId(req.params.id) 
     });
-    
     if (!statement) {
-      return res.status(404).json({ error: 'Statement not found' });
+      return res.status(404).json({ error: 'Report not found' });
     }
-    
     res.json(statement);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -646,8 +892,10 @@ app.delete('/api/user', async (req, res) => {
       return res.status(400).json({ error: 'Invalid security code' });
     }
     
+    // Only delete user account and their personal data
     await db.collection('users').deleteOne({ username });
     
+    // Delete user's personal data only (not inventory data)
     await db.collection('statements').deleteMany({ createdBy: username });
     await db.collection('reference_reports').deleteMany({ createdBy: username });
     await db.collection('purchases').deleteMany({ createdBy: username });
@@ -662,20 +910,24 @@ app.delete('/api/user', async (req, res) => {
 
 // Helper function to draw company header with logo in PDF
 function drawCompanyHeader(doc) {
+  // Draw company header box
   doc.fillColor('#3b82f6')
      .rect(50, 40, 500, 60)
      .fill();
   
+  // Company name with logo (using emoji as text logo)
   doc.fillColor('#ffffff')
      .fontSize(24)
      .font('Helvetica-Bold')
      .text('TREX ENTERPRISE', 60, 55);
   
+  // Company tagline
   doc.fillColor('#dbeafe')
      .fontSize(10)
      .font('Helvetica')
      .text('Professional Inventory Management Solutions', 60, 85);
   
+  // Company contact info on right side
   doc.fillColor('#ffffff')
      .fontSize(8)
      .font('Helvetica')
@@ -683,19 +935,21 @@ function drawCompanyHeader(doc) {
      .text(`Phone: ${COMPANY_INFO.phone}`, 350, 70, { align: 'right' })
      .text(`Email: ${COMPANY_INFO.email}`, 350, 80, { align: 'right' })
   
-  return 110;
+  return 110; // Return the Y position after header
 }
 
 // Helper function to add footer at bottom center of PDF
 function addFooter(doc, pageBottom = 750) {
-  const footerY = pageBottom - 40;
+  const footerY = pageBottom - 40; // Position 40px from bottom
   
+  // Footer separator line
   doc.moveTo(50, footerY - 10)
      .lineTo(550, footerY - 10)
      .strokeColor('#e2e8f0')
      .lineWidth(0.5)
      .stroke();
   
+  // Footer text - centered
   doc.fillColor('#64748b')
      .fontSize(8)
      .font('Helvetica')
@@ -713,7 +967,7 @@ function addFooter(doc, pageBottom = 750) {
      });
 }
 
-// PDF Generation APIs
+// PDF Generation APIs with Professional Layout and QR Codes
 app.post('/generate-reference-report-pdf', async (req, res) => {
   try {
     const { referenceData } = req.body;
@@ -732,40 +986,22 @@ app.post('/generate-reference-report-pdf', async (req, res) => {
     drawCompanyHeader(doc);
     doc.moveDown(1.5);
     
-    const titleY = doc.y;
-    doc.fillColor('#1e293b')
-       .fontSize(20)
-       .font('Helvetica-Bold')
-       .text('REFERENCE REPORT', { align: 'center' });
-       
-    // QR Code Generation
-    if (referenceData._id) {
-      const protocol = req.headers['x-forwarded-proto'] || req.protocol;
-      const host = req.get('host');
-      const viewUrl = `${protocol}://${host}/?page=view-doc&type=reference-reports&id=${referenceData._id}`;
-      const qrBuffer = await QRCode.toBuffer(viewUrl, { errorCorrectionLevel: 'M', margin: 1 });
-      doc.image(qrBuffer, 490, titleY - 15, { width: 50 });
-    }
-    
+    doc.fillColor('#1e293b').fontSize(20).font('Helvetica-Bold').text('REFERENCE REPORT', { align: 'center' });
     doc.moveDown(0.5);
     doc.moveTo(50, doc.y).lineTo(550, doc.y).strokeColor('#e2e8f0').lineWidth(1).stroke();
     doc.moveDown(1);
     
-    const leftColumn = 50;
-    const rightColumn = 300;
+    const leftColumn = 50, rightColumn = 300;
     
-    doc.fillColor('#1e293b').fontSize(11).font('Helvetica')
-       .text('Reference Number:', leftColumn, doc.y, { continued: true }).fillColor('#3b82f6').font('Helvetica-Bold').text(` ${referenceData.reportNumber || 'REF-N/A'}`)
+    doc.fillColor('#1e293b').fontSize(11).font('Helvetica').text('Reference Number:', leftColumn, doc.y, { continued: true }).fillColor('#3b82f6').font('Helvetica-Bold').text(` ${referenceData.reportNumber || 'REF-N/A'}`)
        .fillColor('#1e293b').font('Helvetica').text('Report Date:', leftColumn, doc.y + 20, { continued: true }).fillColor('#64748b').text(` ${referenceData.date || new Date().toLocaleDateString()}`)
        .fillColor('#1e293b').text('Generated By:', rightColumn, doc.y - 40, { continued: true }).fillColor('#64748b').text(` ${referenceData.createdBy || 'Inventory System'}`);
     
     doc.moveDown(2);
-    
     const tableTop = doc.y;
     doc.fillColor('#ffffff').rect(50, tableTop, 500, 25).fill('#3b82f6');
     doc.fillColor('#ffffff').fontSize(10).font('Helvetica-Bold')
-       .text('Item Description', 55, tableTop + 8).text('SKU', 200, tableTop + 8)
-       .text('Qty', 350, tableTop + 8).text('Unit Price', 400, tableTop + 8).text('Total', 470, tableTop + 8);
+       .text('Item Description', 55, tableTop + 8).text('SKU', 200, tableTop + 8).text('Qty', 350, tableTop + 8).text('Unit Price', 400, tableTop + 8).text('Total', 470, tableTop + 8);
     
     let yPosition = tableTop + 35;
     let itemsPerPage = 15;
@@ -778,9 +1014,7 @@ app.post('/generate-reference-report-pdf', async (req, res) => {
       if (index % 2 === 0) doc.fillColor('#f8fafc').rect(50, yPosition - 5, 500, 30).fill();
       
       doc.fillColor('#1e293b').font('Helvetica').fontSize(9)
-         .text(item.name || 'Unnamed Item', 55, yPosition).text(item.sku || 'N/A', 200, yPosition)
-         .text(quantity.toString(), 350, yPosition).text(`RM ${unitPrice.toFixed(2)}`, 400, yPosition).text(`RM ${itemTotal.toFixed(2)}`, 470, yPosition);
-      
+         .text(item.name || 'Unnamed Item', 55, yPosition).text(item.sku || 'N/A', 200, yPosition).text(quantity.toString(), 350, yPosition).text(`RM ${unitPrice.toFixed(2)}`, 400, yPosition).text(`RM ${itemTotal.toFixed(2)}`, 470, yPosition);
       doc.fillColor('#64748b').fontSize(7).text(`Category: ${item.category || 'N/A'}`, 55, yPosition + 12);
       yPosition += 30;
     });
@@ -790,11 +1024,21 @@ app.post('/generate-reference-report-pdf', async (req, res) => {
       yPosition += 20;
     }
     
+    // Total section & QR
     const totalY = Math.min(yPosition + 20, 650);
     doc.moveTo(350, totalY).lineTo(550, totalY).strokeColor('#e2e8f0').lineWidth(1).stroke();
-    doc.fillColor('#1e293b').fontSize(12).font('Helvetica-Bold')
-       .text('Grand Total:', 350, totalY + 10, { continued: true }).fillColor('#3b82f6').text(` RM ${(referenceData.total || 0).toFixed(2)}`, { align: 'right' });
+    doc.fillColor('#1e293b').fontSize(12).font('Helvetica-Bold').text('Grand Total:', 350, totalY + 10, { continued: true }).fillColor('#3b82f6').text(` RM ${(referenceData.total || 0).toFixed(2)}`, { align: 'right' });
     
+    // QR Code generation
+    if (referenceData._id) {
+        const hostUrl = req.get('host') || `localhost:${PORT}`;
+        const docUrl = `${req.protocol}://${hostUrl}/view/reference/${referenceData._id}`;
+        const qrCodeDataUrl = await QRCode.toDataURL(docUrl, { errorCorrectionLevel: 'M', margin: 1 });
+        const qrImageBuffer = Buffer.from(qrCodeDataUrl.split(',')[1], 'base64');
+        doc.image(qrImageBuffer, 50, totalY, { width: 60 });
+        doc.fillColor('#64748b').fontSize(8).font('Helvetica').text('Scan to view online', 45, totalY + 65);
+    }
+
     addFooter(doc, 750);
     doc.end();
   } catch (error) {
@@ -821,41 +1065,22 @@ app.post('/generate-purchase-pdf', async (req, res) => {
     drawCompanyHeader(doc);
     doc.moveDown(1.5);
     
-    const titleY = doc.y;
-    doc.fillColor('#1e293b')
-       .fontSize(20)
-       .font('Helvetica-Bold')
-       .text('PURCHASE ORDER', { align: 'center' });
-       
-    // QR Code Generation
-    if (purchaseData._id) {
-      const protocol = req.headers['x-forwarded-proto'] || req.protocol;
-      const host = req.get('host');
-      const viewUrl = `${protocol}://${host}/?page=view-doc&type=purchases&id=${purchaseData._id}`;
-      const qrBuffer = await QRCode.toBuffer(viewUrl, { errorCorrectionLevel: 'M', margin: 1 });
-      doc.image(qrBuffer, 490, titleY - 15, { width: 50 });
-    }
-    
+    doc.fillColor('#1e293b').fontSize(20).font('Helvetica-Bold').text('PURCHASE ORDER', { align: 'center' });
     doc.moveDown(0.5);
     doc.moveTo(50, doc.y).lineTo(550, doc.y).strokeColor('#e2e8f0').lineWidth(1).stroke();
     doc.moveDown(1);
     
-    const leftColumn = 50;
-    const rightColumn = 300;
-    
-    doc.fillColor('#1e293b').fontSize(11).font('Helvetica')
-       .text('Purchase Number:', leftColumn, doc.y, { continued: true }).fillColor('#10b981').font('Helvetica-Bold').text(` ${purchaseData.purchaseNumber || 'PUR-N/A'}`)
+    const leftColumn = 50, rightColumn = 300;
+    doc.fillColor('#1e293b').fontSize(11).font('Helvetica').text('Purchase Number:', leftColumn, doc.y, { continued: true }).fillColor('#10b981').font('Helvetica-Bold').text(` ${purchaseData.purchaseNumber || 'PUR-N/A'}`)
        .fillColor('#1e293b').font('Helvetica').text('Order Date:', leftColumn, doc.y + 20, { continued: true }).fillColor('#64748b').text(` ${purchaseData.date || new Date().toLocaleDateString()}`)
        .fillColor('#1e293b').text('Supplier:', rightColumn, doc.y - 40, { continued: true }).fillColor('#64748b').text(` ${purchaseData.supplier || 'N/A'}`)
        .fillColor('#1e293b').text('Prepared By:', rightColumn, doc.y + 20, { continued: true }).fillColor('#64748b').text(` ${purchaseData.createdBy || 'Inventory System'}`);
     
     doc.moveDown(2);
-    
     const tableTop = doc.y;
     doc.fillColor('#ffffff').rect(50, tableTop, 500, 25).fill('#10b981');
     doc.fillColor('#ffffff').fontSize(10).font('Helvetica-Bold')
-       .text('Item', 55, tableTop + 8).text('SKU', 200, tableTop + 8)
-       .text('Qty', 300, tableTop + 8).text('Unit Cost', 350, tableTop + 8).text('Total', 450, tableTop + 8);
+       .text('Item', 55, tableTop + 8).text('SKU', 200, tableTop + 8).text('Qty', 300, tableTop + 8).text('Unit Cost', 350, tableTop + 8).text('Total', 450, tableTop + 8);
     
     let yPosition = tableTop + 35;
     let totalCost = 0;
@@ -870,9 +1095,7 @@ app.post('/generate-purchase-pdf', async (req, res) => {
       if (index % 2 === 0) doc.fillColor('#f8fafc').rect(50, yPosition - 5, 500, 25).fill();
       
       doc.fillColor('#1e293b').font('Helvetica').fontSize(9)
-         .text(item.name || 'Unnamed Item', 55, yPosition).text(item.sku || 'N/A', 200, yPosition)
-         .text(quantity.toString(), 300, yPosition).text(`RM ${unitCost.toFixed(2)}`, 350, yPosition).text(`RM ${itemTotal.toFixed(2)}`, 450, yPosition);
-      
+         .text(item.name || 'Unnamed Item', 55, yPosition).text(item.sku || 'N/A', 200, yPosition).text(quantity.toString(), 300, yPosition).text(`RM ${unitCost.toFixed(2)}`, 350, yPosition).text(`RM ${itemTotal.toFixed(2)}`, 450, yPosition);
       yPosition += 25;
     });
     
@@ -881,11 +1104,21 @@ app.post('/generate-purchase-pdf', async (req, res) => {
       yPosition += 20;
     }
     
+    // Total section & QR
     const totalY = Math.min(yPosition + 20, 650);
     doc.moveTo(350, totalY).lineTo(550, totalY).strokeColor('#e2e8f0').lineWidth(1).stroke();
-    doc.fillColor('#1e293b').fontSize(12).font('Helvetica-Bold')
-       .text('Total Cost:', 350, totalY + 10, { continued: true }).fillColor('#10b981').text(` RM ${totalCost.toFixed(2)}`, { align: 'right' });
+    doc.fillColor('#1e293b').fontSize(12).font('Helvetica-Bold').text('Total Cost:', 350, totalY + 10, { continued: true }).fillColor('#10b981').text(` RM ${totalCost.toFixed(2)}`, { align: 'right' });
     
+    // QR Code generation
+    if (purchaseData._id) {
+        const hostUrl = req.get('host') || `localhost:${PORT}`;
+        const docUrl = `${req.protocol}://${hostUrl}/view/purchase/${purchaseData._id}`;
+        const qrCodeDataUrl = await QRCode.toDataURL(docUrl, { errorCorrectionLevel: 'M', margin: 1 });
+        const qrImageBuffer = Buffer.from(qrCodeDataUrl.split(',')[1], 'base64');
+        doc.image(qrImageBuffer, 50, totalY, { width: 60 });
+        doc.fillColor('#64748b').fontSize(8).font('Helvetica').text('Scan to view online', 45, totalY + 65);
+    }
+
     addFooter(doc, 750);
     doc.end();
   } catch (error) {
@@ -912,41 +1145,22 @@ app.post('/generate-sales-pdf', async (req, res) => {
     drawCompanyHeader(doc);
     doc.moveDown(1.5);
     
-    const titleY = doc.y;
-    doc.fillColor('#1e293b')
-       .fontSize(20)
-       .font('Helvetica-Bold')
-       .text('SALES INVOICE', { align: 'center' });
-
-    // QR Code Generation
-    if (salesData._id) {
-      const protocol = req.headers['x-forwarded-proto'] || req.protocol;
-      const host = req.get('host');
-      const viewUrl = `${protocol}://${host}/?page=view-doc&type=sales&id=${salesData._id}`;
-      const qrBuffer = await QRCode.toBuffer(viewUrl, { errorCorrectionLevel: 'M', margin: 1 });
-      doc.image(qrBuffer, 490, titleY - 15, { width: 50 });
-    }
-    
+    doc.fillColor('#1e293b').fontSize(20).font('Helvetica-Bold').text('SALES INVOICE', { align: 'center' });
     doc.moveDown(0.5);
     doc.moveTo(50, doc.y).lineTo(550, doc.y).strokeColor('#e2e8f0').lineWidth(1).stroke();
     doc.moveDown(1);
     
-    const leftColumn = 50;
-    const rightColumn = 300;
-    
-    doc.fillColor('#1e293b').fontSize(11).font('Helvetica')
-       .text('Sales Number:', leftColumn, doc.y, { continued: true }).fillColor('#ef4444').font('Helvetica-Bold').text(` ${salesData.salesNumber || 'SAL-N/A'}`)
+    const leftColumn = 50, rightColumn = 300;
+    doc.fillColor('#1e293b').fontSize(11).font('Helvetica').text('Sales Number:', leftColumn, doc.y, { continued: true }).fillColor('#ef4444').font('Helvetica-Bold').text(` ${salesData.salesNumber || 'SAL-N/A'}`)
        .fillColor('#1e293b').font('Helvetica').text('Sale Date:', leftColumn, doc.y + 20, { continued: true }).fillColor('#64748b').text(` ${salesData.date || new Date().toLocaleDateString()}`)
        .fillColor('#1e293b').text('Customer:', rightColumn, doc.y - 40, { continued: true }).fillColor('#64748b').text(` ${salesData.customer || 'N/A'}`)
        .fillColor('#1e293b').text('Issued By:', rightColumn, doc.y + 20, { continued: true }).fillColor('#64748b').text(` ${salesData.createdBy || 'Inventory System'}`);
     
     doc.moveDown(2);
-    
     const tableTop = doc.y;
     doc.fillColor('#ffffff').rect(50, tableTop, 500, 25).fill('#ef4444');
     doc.fillColor('#ffffff').fontSize(10).font('Helvetica-Bold')
-       .text('Item', 55, tableTop + 8).text('SKU', 200, tableTop + 8)
-       .text('Qty', 300, tableTop + 8).text('Unit Price', 350, tableTop + 8).text('Total', 450, tableTop + 8);
+       .text('Item', 55, tableTop + 8).text('SKU', 200, tableTop + 8).text('Qty', 300, tableTop + 8).text('Unit Price', 350, tableTop + 8).text('Total', 450, tableTop + 8);
     
     let yPosition = tableTop + 35;
     let itemsPerPage = 15;
@@ -959,9 +1173,7 @@ app.post('/generate-sales-pdf', async (req, res) => {
       if (index % 2 === 0) doc.fillColor('#f8fafc').rect(50, yPosition - 5, 500, 25).fill();
       
       doc.fillColor('#1e293b').font('Helvetica').fontSize(9)
-         .text(item.name || 'Unnamed Item', 55, yPosition).text(item.sku || 'N/A', 200, yPosition)
-         .text(quantity.toString(), 300, yPosition).text(`RM ${unitPrice.toFixed(2)}`, 350, yPosition).text(`RM ${itemTotal.toFixed(2)}`, 450, yPosition);
-      
+         .text(item.name || 'Unnamed Item', 55, yPosition).text(item.sku || 'N/A', 200, yPosition).text(quantity.toString(), 300, yPosition).text(`RM ${unitPrice.toFixed(2)}`, 350, yPosition).text(`RM ${itemTotal.toFixed(2)}`, 450, yPosition);
       yPosition += 25;
     });
     
@@ -970,11 +1182,21 @@ app.post('/generate-sales-pdf', async (req, res) => {
       yPosition += 20;
     }
     
+    // Total section & QR
     const totalY = Math.min(yPosition + 20, 650);
     doc.moveTo(350, totalY).lineTo(550, totalY).strokeColor('#e2e8f0').lineWidth(1).stroke();
-    doc.fillColor('#1e293b').fontSize(12).font('Helvetica-Bold')
-       .text('Grand Total:', 350, totalY + 10, { continued: true }).fillColor('#ef4444').text(` RM ${(salesData.total || 0).toFixed(2)}`, { align: 'right' });
+    doc.fillColor('#1e293b').fontSize(12).font('Helvetica-Bold').text('Grand Total:', 350, totalY + 10, { continued: true }).fillColor('#ef4444').text(` RM ${(salesData.total || 0).toFixed(2)}`, { align: 'right' });
     
+    // QR Code generation
+    if (salesData._id) {
+        const hostUrl = req.get('host') || `localhost:${PORT}`;
+        const docUrl = `${req.protocol}://${hostUrl}/view/sale/${salesData._id}`;
+        const qrCodeDataUrl = await QRCode.toDataURL(docUrl, { errorCorrectionLevel: 'M', margin: 1 });
+        const qrImageBuffer = Buffer.from(qrCodeDataUrl.split(',')[1], 'base64');
+        doc.image(qrImageBuffer, 50, totalY, { width: 60 });
+        doc.fillColor('#64748b').fontSize(8).font('Helvetica').text('Scan to view online', 45, totalY + 65);
+    }
+
     addFooter(doc, 750);
     doc.end();
   } catch (error) {
@@ -1001,30 +1223,13 @@ app.post('/generate-inventory-report-pdf', async (req, res) => {
     drawCompanyHeader(doc);
     doc.moveDown(1.5);
     
-    const titleY = doc.y;
-    doc.fillColor('#1e293b')
-       .fontSize(20)
-       .font('Helvetica-Bold')
-       .text('INVENTORY REPORT', { align: 'center' });
-
-    // QR Code Generation
-    if (reportData._id) {
-      const protocol = req.headers['x-forwarded-proto'] || req.protocol;
-      const host = req.get('host');
-      const viewUrl = `${protocol}://${host}/?page=view-doc&type=statements&id=${reportData._id}`;
-      const qrBuffer = await QRCode.toBuffer(viewUrl, { errorCorrectionLevel: 'M', margin: 1 });
-      doc.image(qrBuffer, 490, titleY - 15, { width: 50 });
-    }
-    
+    doc.fillColor('#1e293b').fontSize(20).font('Helvetica-Bold').text('INVENTORY REPORT', { align: 'center' });
     doc.moveDown(0.5);
     doc.moveTo(50, doc.y).lineTo(550, doc.y).strokeColor('#e2e8f0').lineWidth(1).stroke();
     doc.moveDown(1);
     
-    const leftColumn = 50;
-    const rightColumn = 300;
-    
-    doc.fillColor('#1e293b').fontSize(11).font('Helvetica')
-       .text('Report ID:', leftColumn, doc.y, { continued: true }).fillColor('#64748b').text(` ${reportData.id || 'N/A'}`)
+    const leftColumn = 50, rightColumn = 300;
+    doc.fillColor('#1e293b').fontSize(11).font('Helvetica').text('Report ID:', leftColumn, doc.y, { continued: true }).fillColor('#64748b').text(` ${reportData.id || 'N/A'}`)
        .fillColor('#1e293b').text('Generated:', leftColumn, doc.y + 20, { continued: true }).fillColor('#64748b').text(` ${reportData.date || new Date().toLocaleDateString()}`)
        .fillColor('#1e293b').text('Date Range:', leftColumn, doc.y + 40, { continued: true }).fillColor('#64748b').text(` ${reportData.dateRange || 'All Items'}`)
        .fillColor('#1e293b').text('Total Items:', rightColumn, doc.y - 60, { continued: true }).fillColor('#64748b').text(` ${reportData.items.length}`)
@@ -1032,40 +1237,28 @@ app.post('/generate-inventory-report-pdf', async (req, res) => {
        .fillColor('#1e293b').text('Prepared By:', rightColumn, doc.y + 40, { continued: true }).fillColor('#64748b').text(` ${reportData.createdBy || 'Inventory System'}`);
     
     doc.moveDown(2);
-    
     const tableTop = doc.y;
     doc.fillColor('#ffffff').rect(50, tableTop, 500, 25).fill('#06b6d4');
     doc.fillColor('#ffffff').fontSize(9).font('Helvetica-Bold')
-       .text('#', 55, tableTop + 8).text('SKU', 70, tableTop + 8).text('Product Name', 120, tableTop + 8)
-       .text('Category', 220, tableTop + 8).text('Stock', 300, tableTop + 8).text('Cost', 340, tableTop + 8)
-       .text('Price', 390, tableTop + 8).text('Value', 450, tableTop + 8);
+       .text('#', 55, tableTop + 8).text('SKU', 70, tableTop + 8).text('Product Name', 120, tableTop + 8).text('Category', 220, tableTop + 8).text('Stock', 300, tableTop + 8)
+       .text('Cost', 340, tableTop + 8).text('Price', 390, tableTop + 8).text('Value', 450, tableTop + 8);
     
     let yPosition = tableTop + 35;
-    let totalInventoryValue = 0;
-    let totalPotentialValue = 0;
-    let totalItems = 0;
+    let totalInventoryValue = 0, totalPotentialValue = 0, totalItems = 0;
     let itemsPerPage = 20;
     const displayItems = reportData.items.slice(0, itemsPerPage);
     
     displayItems.forEach((item, index) => {
-      const quantity = item.quantity || 0;
-      const unitCost = item.unitCost || 0;
-      const unitPrice = item.unitPrice || 0;
-      const inventoryValue = quantity * unitCost;
-      const potentialValue = quantity * unitPrice;
-      totalInventoryValue += inventoryValue;
-      totalPotentialValue += potentialValue;
-      totalItems += quantity;
+      const quantity = item.quantity || 0, unitCost = item.unitCost || 0, unitPrice = item.unitPrice || 0;
+      const inventoryValue = quantity * unitCost, potentialValue = quantity * unitPrice;
+      totalInventoryValue += inventoryValue; totalPotentialValue += potentialValue; totalItems += quantity;
       
       if (index % 2 === 0) doc.fillColor('#f8fafc').rect(50, yPosition - 5, 500, 20).fill();
       
       doc.fillColor('#1e293b').font('Helvetica').fontSize(8)
-         .text((index + 1).toString(), 55, yPosition).text(item.sku || 'N/A', 70, yPosition)
-         .text((item.name || 'Unnamed Item').length > 25 ? (item.name || 'Unnamed Item').substring(0, 22) + '...' : (item.name || 'Unnamed Item'), 120, yPosition)
-         .text((item.category || 'N/A').length > 15 ? (item.category || 'N/A').substring(0, 12) + '...' : (item.category || 'N/A'), 220, yPosition)
-         .text(quantity.toString(), 300, yPosition).text(`RM ${unitCost.toFixed(2)}`, 340, yPosition)
-         .text(`RM ${unitPrice.toFixed(2)}`, 390, yPosition).text(`RM ${inventoryValue.toFixed(2)}`, 450, yPosition);
-      
+         .text((index + 1).toString(), 55, yPosition).text(item.sku || 'N/A', 70, yPosition).text((item.name || 'Unnamed Item').length > 25 ? (item.name || 'Unnamed Item').substring(0, 22) + '...' : (item.name || 'Unnamed Item'), 120, yPosition)
+         .text((item.category || 'N/A').length > 15 ? (item.category || 'N/A').substring(0, 12) + '...' : (item.category || 'N/A'), 220, yPosition).text(quantity.toString(), 300, yPosition)
+         .text(`RM ${unitCost.toFixed(2)}`, 340, yPosition).text(`RM ${unitPrice.toFixed(2)}`, 390, yPosition).text(`RM ${inventoryValue.toFixed(2)}`, 450, yPosition);
       yPosition += 20;
     });
     
@@ -1074,6 +1267,7 @@ app.post('/generate-inventory-report-pdf', async (req, res) => {
       yPosition += 20;
     }
     
+    // Summary section & QR
     const summaryY = Math.min(yPosition + 30, 650);
     doc.fillColor('#f8fafc').rect(50, summaryY, 500, 100).fill();
     doc.strokeColor('#e2e8f0').rect(50, summaryY, 500, 100).stroke();
@@ -1082,10 +1276,21 @@ app.post('/generate-inventory-report-pdf', async (req, res) => {
     doc.fillColor('#64748b').fontSize(9).font('Helvetica')
        .text('Total Items in Report:', 55, summaryY + 35, { continued: true }).fillColor('#1e293b').text(` ${reportData.items.length} products`)
        .fillColor('#64748b').text('Total Stock Quantity:', 55, summaryY + 50, { continued: true }).fillColor('#1e293b').text(` ${totalItems} units`)
-       .fillColor('#64748b').text('Total Inventory Value:', 280, summaryY + 35, { continued: true }).fillColor('#ef4444').text(` RM ${totalInventoryValue.toFixed(2)}`)
-       .fillColor('#64748b').text('Total Potential Value:', 280, summaryY + 50, { continued: true }).fillColor('#10b981').text(` RM ${totalPotentialValue.toFixed(2)}`)
-       .fillColor('#64748b').text('Profit Potential:', 280, summaryY + 65, { continued: true }).fillColor('#3b82f6').text(` RM ${(totalPotentialValue - totalInventoryValue).toFixed(2)}`);
+       .fillColor('#64748b').text('Total Inventory Value:', 230, summaryY + 35, { continued: true }).fillColor('#ef4444').text(` RM ${totalInventoryValue.toFixed(2)}`)
+       .fillColor('#64748b').text('Total Potential Value:', 230, summaryY + 50, { continued: true }).fillColor('#10b981').text(` RM ${totalPotentialValue.toFixed(2)}`)
+       .fillColor('#64748b').text('Profit Potential:', 230, summaryY + 65, { continued: true }).fillColor('#3b82f6').text(` RM ${(totalPotentialValue - totalInventoryValue).toFixed(2)}`);
     
+    // QR Code inside summary box on the right
+    if (reportData._id || reportData.id) {
+        const docId = reportData._id || reportData.id;
+        const hostUrl = req.get('host') || `localhost:${PORT}`;
+        const docUrl = `${req.protocol}://${hostUrl}/view/inventory-report/${docId}`;
+        const qrCodeDataUrl = await QRCode.toDataURL(docUrl, { errorCorrectionLevel: 'M', margin: 1 });
+        const qrImageBuffer = Buffer.from(qrCodeDataUrl.split(',')[1], 'base64');
+        doc.image(qrImageBuffer, 460, summaryY + 15, { width: 70 });
+        doc.fillColor('#64748b').fontSize(8).font('Helvetica').text('Scan to view', 465, summaryY + 87);
+    }
+
     addFooter(doc, 750);
     doc.end();
   } catch (error) {
@@ -1094,7 +1299,7 @@ app.post('/generate-inventory-report-pdf', async (req, res) => {
   }
 });
 
-// HTML Page Templates
+// HTML Page Templates - UPDATED WITH COMPANY NAME
 function getLoginPage() {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -1112,7 +1317,7 @@ function getLoginPage() {
         <div class="logo">🏢</div>
         <h1 class="main-title">${COMPANY_INFO.name.toUpperCase()}</h1>
         <p class="subtitle">Complete Inventory Management Solution</p>
-        <p class="subtitle" style="margin-top: 5px; font-size: 0.9rem;">Professional Inventory System with PDF Reporting</p>
+        <p class="subtitle" style="margin-top: 5px; font-size: 0.9rem;">Professional Inventory System with PDF & QR Reporting</p>
       </div>
       
       <div class="auth-card">
@@ -1418,6 +1623,8 @@ function getDashboardPage() {
   <script>${getJavaScript()}</script>
   <script>
     let inventoryItems = [];
+    let currentPurchaseId = null;
+    let currentSalesId = null;
 
     async function loadLoginHistory() {
       try {
@@ -1434,7 +1641,9 @@ function getDashboardPage() {
           }
         });
         
-        if (!response.ok) throw new Error('Failed to load login history');
+        if (!response.ok) {
+          throw new Error('Failed to load login history');
+        }
         
         const history = await response.json();
         const container = document.getElementById('loginHistory');
@@ -1496,12 +1705,19 @@ function getDashboardPage() {
 
     function getDeviceInfo(userAgent) {
       if (!userAgent) return 'Unknown';
-      if (userAgent.includes('Mobile')) return '📱 Mobile';
-      else if (userAgent.includes('Tablet')) return '📱 Tablet';
-      else return '💻 Desktop';
+      
+      if (userAgent.includes('Mobile')) {
+        return '📱 Mobile';
+      } else if (userAgent.includes('Tablet')) {
+        return '📱 Tablet';
+      } else {
+        return '💻 Desktop';
+      }
     }
 
-    function refreshLoginHistory() { loadLoginHistory(); }
+    function refreshLoginHistory() {
+      loadLoginHistory();
+    }
 
     async function loadInventory() {
       try {
@@ -1515,10 +1731,15 @@ function getDashboardPage() {
         if (search) params.append('search', search);
         if (dateFrom) params.append('dateFrom', dateFrom);
         if (dateTo) params.append('dateTo', dateTo);
-        if (params.toString()) url += '?' + params.toString();
+        
+        if (params.toString()) {
+          url += '?' + params.toString();
+        }
         
         const response = await fetch(url);
-        if (!response.ok) throw new Error('Failed to load inventory');
+        if (!response.ok) {
+          throw new Error('Failed to load inventory');
+        }
         
         inventoryItems = await response.json();
         const body = document.getElementById('inventoryBody');
@@ -1552,8 +1773,11 @@ function getDashboardPage() {
             </tr>\`;
         });
 
+        // Update table footer
         document.getElementById('totalInventoryValue').textContent = \`RM \${totalInventoryValue.toFixed(2)}\`;
         document.getElementById('totalPotentialValue').textContent = \`RM \${totalPotentialValue.toFixed(2)}\`;
+
+        // Update summary cards
         document.getElementById('totalInventoryValueSummary').textContent = \`RM \${totalInventoryValue.toFixed(2)}\`;
         document.getElementById('totalPotentialValueSummary').textContent = \`RM \${totalPotentialValue.toFixed(2)}\`;
         document.getElementById('totalItemsCount').textContent = inventoryItems.length;
@@ -1563,7 +1787,9 @@ function getDashboardPage() {
       }
     }
 
-    function searchInventory() { loadInventory(); }
+    function searchInventory() {
+      loadInventory();
+    }
 
     function clearSearch() {
       document.getElementById('searchInput').value = '';
@@ -1587,10 +1813,13 @@ function getDashboardPage() {
       document.getElementById('editModal').style.display = 'block';
     }
 
-    function closeEditModal() { document.getElementById('editModal').style.display = 'none'; }
+    function closeEditModal() {
+      document.getElementById('editModal').style.display = 'none';
+    }
 
     document.getElementById('editItemForm').addEventListener('submit', async (e) => {
       e.preventDefault();
+      
       const itemId = document.getElementById('editItemId').value;
       const updatedItem = {
         sku: document.getElementById('editItemSKU').value,
@@ -1656,6 +1885,7 @@ function getDashboardPage() {
 
     async function deleteItem(id) {
       if (!confirm('Are you sure you want to delete this item?')) return;
+      
       try {
         const response = await fetch('/api/inventory/' + id, { method: 'DELETE' });
         const data = await response.json();
@@ -1680,17 +1910,26 @@ function getDashboardPage() {
         
         let url = '/api/inventory';
         const params = new URLSearchParams();
+        
         if (search) params.append('search', search);
         if (dateFrom) params.append('dateFrom', dateFrom);
         if (dateTo) params.append('dateTo', dateTo);
-        if (params.toString()) url += '?' + params.toString();
+        
+        if (params.toString()) {
+          url += '?' + params.toString();
+        }
         
         const response = await fetch(url);
         const items = await response.json();
         
-        if (items.length === 0) { alert('No inventory items to generate report!'); return; }
+        if (items.length === 0) {
+          alert('No inventory items to generate report!');
+          return;
+        }
 
-        let totalInventoryValue = 0; let totalPotentialValue = 0;
+        let totalInventoryValue = 0;
+        let totalPotentialValue = 0;
+        
         items.forEach(item => {
           totalInventoryValue += (item.quantity || 0) * (item.unitCost || 0);
           totalPotentialValue += (item.quantity || 0) * (item.unitPrice || 0);
@@ -1708,16 +1947,21 @@ function getDashboardPage() {
           createdBy: user.username
         };
 
+        // Save the report to statements
         const saveResponse = await fetch('/api/statements/add', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ reportData, createdBy: user.username })
         });
 
-        if (!saveResponse.ok) throw new Error('Failed to save report');
+        if (!saveResponse.ok) {
+          throw new Error('Failed to save report');
+        }
+
         const saveResult = await saveResponse.json();
         reportData._id = saveResult.id;
 
+        // Generate PDF
         const pdfResponse = await fetch('/generate-inventory-report-pdf', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1744,7 +1988,10 @@ function getDashboardPage() {
 
     document.addEventListener('DOMContentLoaded', () => {
       const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
-      if (!user.username) { window.location.href = '/'; return; }
+      if (!user.username) {
+        window.location.href = '/';
+        return;
+      }
       document.getElementById('username').textContent = user.username;
       loadLoginHistory();
       loadInventory();
@@ -1811,7 +2058,10 @@ function getReferencePage() {
       try {
         const search = document.getElementById('referenceSearch').value;
         let url = '/api/inventory';
-        if (search) url += '?search=' + encodeURIComponent(search);
+        
+        if (search) {
+          url += '?search=' + encodeURIComponent(search);
+        }
         
         const response = await fetch(url);
         if (!response.ok) throw new Error('Failed to load items');
@@ -1843,19 +2093,27 @@ function getReferencePage() {
       }
     }
 
-    function searchReferenceItems() { loadAvailableItems(); }
+    function searchReferenceItems() {
+      loadAvailableItems();
+    }
 
     function addToReference(index) {
       const item = availableItems[index];
       const quantity = parseInt(document.getElementById(\`qty-\${index}\`).value) || 1;
       
-      if (quantity > (item.quantity || 0)) { alert(\`Only \${item.quantity || 0} items available!\`); return; }
+      if (quantity > (item.quantity || 0)) {
+        alert(\`Only \${item.quantity || 0} items available!\`);
+        return;
+      }
 
       const existingIndex = selectedReferenceItems.findIndex(selected => selected._id === item._id);
       if (existingIndex > -1) {
         selectedReferenceItems[existingIndex].invoiceQty = quantity;
       } else {
-        selectedReferenceItems.push({ ...item, invoiceQty: quantity });
+        selectedReferenceItems.push({ 
+          ...item, 
+          invoiceQty: quantity 
+        });
       }
       
       updateReferenceDisplay();
@@ -1902,7 +2160,10 @@ function getReferencePage() {
     }
 
     async function downloadReferencePDF() {
-      if (selectedReferenceItems.length === 0) { alert('Please add items to the reference report first!'); return; }
+      if (selectedReferenceItems.length === 0) {
+        alert('Please add items to the reference report first!');
+        return;
+      }
 
       try {
         const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
@@ -1913,6 +2174,7 @@ function getReferencePage() {
           createdBy: user.username
         };
 
+        // Save reference report first to get the report number
         const saveResponse = await fetch('/api/reference-reports/add', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1925,6 +2187,8 @@ function getReferencePage() {
         }
 
         const saveResult = await saveResponse.json();
+        
+        // Now generate PDF with the report number
         referenceData.reportNumber = saveResult.reportNumber;
         referenceData._id = saveResult.id;
         
@@ -1948,7 +2212,7 @@ function getReferencePage() {
         window.URL.revokeObjectURL(url);
         
         alert('Reference Report PDF generated successfully! Report number: ' + referenceData.reportNumber);
-        clearReference();
+        clearReference(); // Clear after successful download
       } catch (error) {
         alert('Error generating PDF: ' + error.message);
       }
@@ -1956,7 +2220,10 @@ function getReferencePage() {
 
     document.addEventListener('DOMContentLoaded', () => {
       const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
-      if (!user.username) { window.location.href = '/'; return; }
+      if (!user.username) {
+        window.location.href = '/';
+        return;
+      }
       document.getElementById('username').textContent = user.username;
       loadAvailableItems();
     });
@@ -2030,7 +2297,10 @@ function getPurchasePage() {
       try {
         const search = document.getElementById('purchaseSearch').value;
         let url = '/api/inventory';
-        if (search) url += '?search=' + encodeURIComponent(search);
+        
+        if (search) {
+          url += '?search=' + encodeURIComponent(search);
+        }
         
         const response = await fetch(url);
         if (!response.ok) throw new Error('Failed to load items');
@@ -2062,13 +2332,15 @@ function getPurchasePage() {
       }
     }
 
-    function searchPurchaseItems() { loadAvailableItems(); }
+    function searchPurchaseItems() {
+      loadAvailableItems();
+    }
 
     function addToPurchase(index) {
       const item = availableItems[index];
       const quantity = parseInt(document.getElementById(\`purchase-qty-\${index}\`).value) || 1;
       
-      const existingIndex = selectedPurchaseItems.findIndex(selected => selected.itemId === item._id);
+      const existingIndex = selectedPurchaseItems.findIndex(selected => selected._id === item._id);
       if (existingIndex > -1) {
         selectedPurchaseItems[existingIndex].quantity = quantity;
       } else {
@@ -2123,7 +2395,10 @@ function getPurchasePage() {
     }
 
     async function processPurchase() {
-      if (selectedPurchaseItems.length === 0) { alert('Please add items to the purchase first!'); return; }
+      if (selectedPurchaseItems.length === 0) {
+        alert('Please add items to the purchase first!');
+        return;
+      }
 
       try {
         const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
@@ -2147,12 +2422,14 @@ function getPurchasePage() {
         }
 
         const data = await response.json();
+        
         alert('Purchase processed successfully! Purchase Number: ' + data.purchaseNumber);
         
+        // Automatically download the PDF after processing
         await downloadPurchasePDF(data.id);
         
-        clearPurchase();
-        loadAvailableItems();
+        clearPurchase(); // Clear items after successful processing
+        loadAvailableItems(); // Refresh available items
       } catch (error) {
         console.error('Purchase error:', error);
         alert('Failed to process purchase: ' + error.message);
@@ -2161,8 +2438,11 @@ function getPurchasePage() {
 
     async function downloadPurchasePDF(purchaseId) {
       try {
+        // Fetch the purchase data from the database
         const response = await fetch('/api/purchases/' + purchaseId);
-        if (!response.ok) throw new Error('Purchase not found');
+        if (!response.ok) {
+          throw new Error('Purchase not found');
+        }
         const purchase = await response.json();
         
         const pdfResponse = await fetch('/generate-purchase-pdf', {
@@ -2185,12 +2465,16 @@ function getPurchasePage() {
         window.URL.revokeObjectURL(url);
       } catch (error) {
         console.error('PDF download error:', error);
+        // Don't alert here as purchase was successful
       }
     }
 
     document.addEventListener('DOMContentLoaded', () => {
       const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
-      if (!user.username) { window.location.href = '/'; return; }
+      if (!user.username) {
+        window.location.href = '/';
+        return;
+      }
       document.getElementById('username').textContent = user.username;
       loadAvailableItems();
     });
@@ -2264,7 +2548,10 @@ function getSalesPage() {
       try {
         const search = document.getElementById('salesSearch').value;
         let url = '/api/inventory';
-        if (search) url += '?search=' + encodeURIComponent(search);
+        
+        if (search) {
+          url += '?search=' + encodeURIComponent(search);
+        }
         
         const response = await fetch(url);
         if (!response.ok) throw new Error('Failed to load items');
@@ -2296,15 +2583,20 @@ function getSalesPage() {
       }
     }
 
-    function searchSalesItems() { loadAvailableItems(); }
+    function searchSalesItems() {
+      loadAvailableItems();
+    }
 
     function addToSale(index) {
       const item = availableItems[index];
       const quantity = parseInt(document.getElementById(\`sales-qty-\${index}\`).value) || 1;
       
-      if (quantity > (item.quantity || 0)) { alert(\`Only \${item.quantity || 0} items available in stock!\`); return; }
+      if (quantity > (item.quantity || 0)) {
+        alert(\`Only \${item.quantity || 0} items available in stock!\`);
+        return;
+      }
 
-      const existingIndex = selectedSalesItems.findIndex(selected => selected.itemId === item._id);
+      const existingIndex = selectedSalesItems.findIndex(selected => selected._id === item._id);
       if (existingIndex > -1) {
         selectedSalesItems[existingIndex].quantity = quantity;
       } else {
@@ -2359,7 +2651,10 @@ function getSalesPage() {
     }
 
     async function processSale() {
-      if (selectedSalesItems.length === 0) { alert('Please add items to the sale first!'); return; }
+      if (selectedSalesItems.length === 0) {
+        alert('Please add items to the sale first!');
+        return;
+      }
 
       try {
         const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
@@ -2383,12 +2678,14 @@ function getSalesPage() {
         }
 
         const data = await response.json();
+        
         alert('Sale processed successfully! Sales Number: ' + data.salesNumber);
         
+        // Automatically download the PDF after processing
         await downloadSalesPDF(data.id);
         
-        clearSale();
-        loadAvailableItems();
+        clearSale(); // Clear items after successful processing
+        loadAvailableItems(); // Refresh available items
       } catch (error) {
         console.error('Sales error:', error);
         alert('Failed to process sale: ' + error.message);
@@ -2397,8 +2694,11 @@ function getSalesPage() {
 
     async function downloadSalesPDF(saleId) {
       try {
+        // Fetch the sales data from the database
         const response = await fetch('/api/sales/' + saleId);
-        if (!response.ok) throw new Error('Sale not found');
+        if (!response.ok) {
+          throw new Error('Sale not found');
+        }
         const sale = await response.json();
         
         const pdfResponse = await fetch('/generate-sales-pdf', {
@@ -2421,12 +2721,16 @@ function getSalesPage() {
         window.URL.revokeObjectURL(url);
       } catch (error) {
         console.error('PDF download error:', error);
+        // Don't alert here as sale was successful
       }
     }
 
     document.addEventListener('DOMContentLoaded', () => {
       const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
-      if (!user.username) { window.location.href = '/'; return; }
+      if (!user.username) {
+        window.location.href = '/';
+        return;
+      }
       document.getElementById('username').textContent = user.username;
       loadAvailableItems();
     });
@@ -2640,7 +2944,9 @@ function getStatementPage() {
     async function downloadReport(id) {
       try {
         const response = await fetch('/api/statements/' + id);
-        if (!response.ok) throw new Error('Report not found');
+        if (!response.ok) {
+          throw new Error('Report not found');
+        }
         const report = await response.json();
         
         const pdfResponse = await fetch('/generate-inventory-report-pdf', {
@@ -2669,7 +2975,9 @@ function getStatementPage() {
     async function downloadReferenceReportPDF(id) {
       try {
         const response = await fetch('/api/reference-reports/' + id);
-        if (!response.ok) throw new Error('Reference report not found');
+        if (!response.ok) {
+          throw new Error('Reference report not found');
+        }
         const report = await response.json();
         
         const pdfResponse = await fetch('/generate-reference-report-pdf', {
@@ -2698,7 +3006,9 @@ function getStatementPage() {
     async function downloadPurchasePDF(id) {
       try {
         const response = await fetch('/api/purchases/' + id);
-        if (!response.ok) throw new Error('Purchase not found');
+        if (!response.ok) {
+          throw new Error('Purchase not found');
+        }
         const purchase = await response.json();
         
         const pdfResponse = await fetch('/generate-purchase-pdf', {
@@ -2727,7 +3037,9 @@ function getStatementPage() {
     async function downloadSalePDF(id) {
       try {
         const response = await fetch('/api/sales/' + id);
-        if (!response.ok) throw new Error('Sale not found');
+        if (!response.ok) {
+          throw new Error('Sale not found');
+        }
         const sale = await response.json();
         
         const pdfResponse = await fetch('/generate-sales-pdf', {
@@ -2759,9 +3071,16 @@ function getStatementPage() {
       try {
         const response = await fetch('/api/statements/' + id, { method: 'DELETE' });
         const data = await response.json();
-        if (response.ok) { loadReports(); alert('Report deleted successfully!'); } 
-        else { alert('Failed to delete report: ' + data.error); }
-      } catch (error) { alert('Error deleting report: ' + error.message); }
+        
+        if (response.ok) {
+          loadReports();
+          alert('Report deleted successfully!');
+        } else {
+          alert('Failed to delete report: ' + data.error);
+        }
+      } catch (error) {
+        alert('Error deleting report: ' + error.message);
+      }
     }
 
     async function deleteReferenceReport(id) {
@@ -2770,9 +3089,16 @@ function getStatementPage() {
       try {
         const response = await fetch('/api/reference-reports/' + id, { method: 'DELETE' });
         const data = await response.json();
-        if (response.ok) { loadReferenceReports(); alert('Reference report deleted successfully!'); } 
-        else { alert('Failed to delete reference report: ' + data.error); }
-      } catch (error) { alert('Error deleting reference report: ' + error.message); }
+        
+        if (response.ok) {
+          loadReferenceReports();
+          alert('Reference report deleted successfully!');
+        } else {
+          alert('Failed to delete reference report: ' + data.error);
+        }
+      } catch (error) {
+        alert('Error deleting reference report: ' + error.message);
+      }
     }
 
     async function deletePurchase(id) {
@@ -2781,9 +3107,16 @@ function getStatementPage() {
       try {
         const response = await fetch('/api/purchases/' + id, { method: 'DELETE' });
         const data = await response.json();
-        if (response.ok) { loadPurchases(); alert('Purchase deleted successfully!'); } 
-        else { alert('Failed to delete purchase: ' + data.error); }
-      } catch (error) { alert('Error deleting purchase: ' + error.message); }
+        
+        if (response.ok) {
+          loadPurchases();
+          alert('Purchase deleted successfully!');
+        } else {
+          alert('Failed to delete purchase: ' + data.error);
+        }
+      } catch (error) {
+        alert('Error deleting purchase: ' + error.message);
+      }
     }
 
     async function deleteSale(id) {
@@ -2792,16 +3125,29 @@ function getStatementPage() {
       try {
         const response = await fetch('/api/sales/' + id, { method: 'DELETE' });
         const data = await response.json();
-        if (response.ok) { loadSales(); alert('Sale deleted successfully!'); } 
-        else { alert('Failed to delete sale: ' + data.error); }
-      } catch (error) { alert('Error deleting sale: ' + error.message); }
+        
+        if (response.ok) {
+          loadSales();
+          alert('Sale deleted successfully!');
+        } else {
+          alert('Failed to delete sale: ' + data.error);
+        }
+      } catch (error) {
+        alert('Error deleting sale: ' + error.message);
+      }
     }
 
     document.addEventListener('DOMContentLoaded', () => {
       const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
-      if (!user.username) { window.location.href = '/'; return; }
+      if (!user.username) {
+        window.location.href = '/';
+        return;
+      }
       document.getElementById('username').textContent = user.username;
-      loadReports(); loadReferenceReports(); loadPurchases(); loadSales();
+      loadReports();
+      loadReferenceReports();
+      loadPurchases();
+      loadSales();
     });
   </script>
 </body>
@@ -2872,8 +3218,15 @@ function getSettingsPage() {
       const newPassword = document.getElementById('newPassword').value;
       const confirmPassword = document.getElementById('confirmPassword').value;
 
-      if (newPassword !== confirmPassword) { alert('New passwords do not match!'); return; }
-      if (newPassword.length < 4) { alert('New password must be at least 4 characters long!'); return; }
+      if (newPassword !== confirmPassword) {
+        alert('New passwords do not match!');
+        return;
+      }
+
+      if (newPassword.length < 4) {
+        alert('New password must be at least 4 characters long!');
+        return;
+      }
 
       const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
 
@@ -2881,18 +3234,33 @@ function getSettingsPage() {
         const response = await fetch('/api/user/password', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username: user.username, currentPassword, newPassword })
+          body: JSON.stringify({
+            username: user.username,
+            currentPassword: currentPassword,
+            newPassword: newPassword
+          })
         });
 
         const data = await response.json();
-        if (response.ok) { alert('Password changed successfully!'); document.getElementById('changePasswordForm').reset(); } 
-        else { alert('Failed to change password: ' + data.error); }
-      } catch (error) { alert('Error changing password: ' + error.message); }
+
+        if (response.ok) {
+          alert('Password changed successfully!');
+          document.getElementById('changePasswordForm').reset();
+        } else {
+          alert('Failed to change password: ' + data.error);
+        }
+      } catch (error) {
+        alert('Error changing password: ' + error.message);
+      }
     });
 
     async function deleteAccount() {
       const securityCode = document.getElementById('deleteSecurityCode').value;
-      if (!securityCode) { alert('Please enter the security code to confirm account deletion.'); return; }
+      
+      if (!securityCode) {
+        alert('Please enter the security code to confirm account deletion.');
+        return;
+      }
 
       const confirmDelete = confirm('ARE YOU SURE YOU WANT TO DELETE YOUR ACCOUNT?\\n\\n⚠️  This action cannot be undone!\\n\\nYour personal data will be deleted but inventory data will be preserved for other users.');
       
@@ -2903,219 +3271,35 @@ function getSettingsPage() {
           const response = await fetch('/api/user', {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: user.username, securityCode: securityCode })
+            body: JSON.stringify({ 
+              username: user.username,
+              securityCode: securityCode
+            })
           });
 
           const data = await response.json();
+
           if (response.ok) {
             localStorage.removeItem('currentUser');
             alert('Account deleted successfully! Inventory data preserved.');
             window.location.href = '/';
-          } else { alert('Failed to delete account: ' + data.error); }
-        } catch (error) { alert('Error deleting account: ' + error.message); }
+          } else {
+            alert('Failed to delete account: ' + data.error);
+          }
+        } catch (error) {
+          alert('Error deleting account: ' + error.message);
+        }
       }
     }
 
     document.addEventListener('DOMContentLoaded', () => {
       const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
-      if (!user.username) { window.location.href = '/'; return; }
-      document.getElementById('username').textContent = user.username;
-    });
-  </script>
-</body>
-</html>`;
-}
-
-// NEW FUNCTION: View Document Page for Scanned QR Codes
-function getViewDocPage() {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>View Document | ${COMPANY_INFO.name}</title>
-  <style>
-    body { font-family: 'Helvetica', 'Arial', sans-serif; background: #f1f5f9; margin: 0; padding: 20px; color: #1e293b; }
-    .print-container { max-width: 800px; margin: 0 auto; background: white; padding: 40px; border-radius: 8px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
-    .header { background: #3b82f6; color: white; padding: 20px; border-radius: 8px 8px 0 0; margin: -40px -40px 30px -40px; display: flex; justify-content: space-between; align-items: center; }
-    .company-details h1 { margin: 0; font-size: 24px; }
-    .company-details p { margin: 5px 0 0 0; font-size: 12px; color: #dbeafe; }
-    .doc-title { text-align: center; font-size: 24px; font-weight: bold; margin-bottom: 30px; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px; }
-    .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px; }
-    .info-group { margin-bottom: 10px; }
-    .info-label { font-weight: bold; color: #64748b; font-size: 14px; }
-    .info-value { font-size: 16px; margin-top: 4px; font-weight: bold;}
-    .table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
-    .table th { background: #f8fafc; text-align: left; padding: 12px; border-bottom: 2px solid #e2e8f0; color: #64748b; }
-    .table td { padding: 12px; border-bottom: 1px solid #e2e8f0; font-size: 14px; }
-    .totals { border-top: 2px solid #e2e8f0; padding-top: 20px; text-align: right; }
-    .grand-total { font-size: 20px; font-weight: bold; color: #1e293b; }
-    .footer { text-align: center; margin-top: 40px; padding-top: 20px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8; }
-    .loader { text-align: center; padding: 50px; font-size: 18px; color: #64748b; }
-    .error { color: #ef4444; text-align: center; padding: 50px; font-weight: bold; }
-    @media print {
-      body { background: white; padding: 0; }
-      .print-container { box-shadow: none; max-width: 100%; padding: 0; }
-    }
-  </style>
-</head>
-<body>
-  <div id="app" class="print-container">
-    <div class="loader">Loading document details...</div>
-  </div>
-
-  <script>
-    const COMPANY_NAME = "${COMPANY_INFO.name}";
-    const COMPANY_ADDR = "${COMPANY_INFO.address}";
-    const COMPANY_PHONE = "${COMPANY_INFO.phone}";
-    const COMPANY_EMAIL = "${COMPANY_INFO.email}";
-
-    async function loadDocument() {
-      const urlParams = new URLSearchParams(window.location.search);
-      const type = urlParams.get('type');
-      const id = urlParams.get('id');
-      const appDiv = document.getElementById('app');
-
-      if (!type || !id) {
-        appDiv.innerHTML = '<div class="error">Invalid document link. Missing parameters.</div>';
+      if (!user.username) {
+        window.location.href = '/';
         return;
       }
-
-      try {
-        const response = await fetch(\`/api/\${type}/\${id}\`);
-        if (!response.ok) throw new Error('Document not found or no longer exists.');
-        
-        const rawData = await response.json();
-        // Handle statements structure vs others
-        const data = type === 'statements' ? rawData.reportData : rawData;
-        
-        let title = '';
-        let docNumber = '';
-        let date = data.date || new Date(data.createdAt).toLocaleDateString();
-        let entityLabel = '';
-        let entityName = '';
-        let createdBy = data.createdBy || 'System';
-        let items = data.items || [];
-        let total = data.total || 0;
-        let isInventory = false;
-        let colorTheme = '#3b82f6';
-
-        if (type === 'sales') {
-          title = 'SALES INVOICE'; docNumber = data.salesNumber; entityLabel = 'Customer'; entityName = data.customer; colorTheme = '#ef4444';
-        } else if (type === 'purchases') {
-          title = 'PURCHASE ORDER'; docNumber = data.purchaseNumber; entityLabel = 'Supplier'; entityName = data.supplier; colorTheme = '#10b981';
-        } else if (type === 'reference-reports') {
-          title = 'REFERENCE REPORT'; docNumber = data.reportNumber;
-        } else if (type === 'statements') {
-          title = 'INVENTORY REPORT'; docNumber = data.id; isInventory = true; colorTheme = '#06b6d4';
-        }
-
-        let html = \`
-          <div class="header" style="background-color: \${colorTheme}">
-            <div class="company-details">
-              <h1>\${COMPANY_NAME}</h1>
-              <p>\${COMPANY_ADDR}</p>
-              <p>\${COMPANY_PHONE} | \${COMPANY_EMAIL}</p>
-            </div>
-            <div>
-              <span style="background: white; color: \${colorTheme}; padding: 5px 10px; border-radius: 4px; font-weight: bold;">VERIFIED COPY</span>
-            </div>
-          </div>
-          
-          <div class="doc-title">\${title}</div>
-          
-          <div class="info-grid">
-            <div>
-              <div class="info-group">
-                <div class="info-label">Document Number</div>
-                <div class="info-value" style="color: \${colorTheme}">\${docNumber || 'N/A'}</div>
-              </div>
-              <div class="info-group">
-                <div class="info-label">Date</div>
-                <div class="info-value">\${date}</div>
-              </div>
-            </div>
-            <div style="text-align: right;">
-              \${entityLabel ? \`
-              <div class="info-group">
-                <div class="info-label">\${entityLabel}</div>
-                <div class="info-value">\${entityName || 'N/A'}</div>
-              </div>\` : ''}
-              <div class="info-group">
-                <div class="info-label">Issued By</div>
-                <div class="info-value">\${createdBy}</div>
-              </div>
-            </div>
-          </div>
-
-          <table class="table">
-            <thead>
-              <tr>
-                <th>Item</th>
-                <th>SKU</th>
-                <th>Qty</th>
-                <th>Price/Cost</th>
-                <th style="text-align: right;">Total</th>
-              </tr>
-            </thead>
-            <tbody>
-        \`;
-
-        items.forEach(item => {
-          const qty = item.invoiceQty || item.quantity || 1;
-          const price = item.unitPrice || item.unitCost || 0;
-          const lineTotal = qty * price;
-          
-          html += \`
-            <tr>
-              <td>\${item.name || 'Unnamed Item'}<br><small style="color:#94a3b8">\${item.category || 'N/A'}</small></td>
-              <td>\${item.sku || 'N/A'}</td>
-              <td>\${qty}</td>
-              <td>RM \${price.toFixed(2)}</td>
-              <td style="text-align: right;">RM \${lineTotal.toFixed(2)}</td>
-            </tr>
-          \`;
-        });
-
-        html += \`
-            </tbody>
-          </table>
-        \`;
-
-        if (!isInventory) {
-          html += \`
-            <div class="totals">
-              <span style="color: #64748b; margin-right: 20px;">Grand Total</span>
-              <span class="grand-total" style="color: \${colorTheme}">RM \${total.toFixed(2)}</span>
-            </div>
-          \`;
-        } else {
-           html += \`
-            <div class="totals" style="text-align: left;">
-              <p><strong>Total Inventory Value:</strong> \${data.totalInventoryValue || 'N/A'}</p>
-              <p><strong>Total Potential Value:</strong> \${data.totalPotentialValue || 'N/A'}</p>
-            </div>
-          \`;
-        }
-
-        html += \`
-          <div class="footer">
-            Generated by \${COMPANY_NAME} Inventory Management System<br>
-            Scanned on \${new Date().toLocaleString()}
-          </div>
-          <div style="text-align: center; margin-top: 20px;">
-             <button onclick="window.print()" style="padding: 10px 20px; background: #1e293b; color: white; border: none; border-radius: 4px; cursor: pointer;">Print Document</button>
-          </div>
-        \`;
-
-        appDiv.innerHTML = html;
-
-      } catch (error) {
-        appDiv.innerHTML = \`<div class="error">Error loading document:<br>\${error.message}</div>\`;
-      }
-    }
-
-    window.onload = loadDocument;
+      document.getElementById('username').textContent = user.username;
+    });
   </script>
 </body>
 </html>`;
@@ -3124,24 +3308,77 @@ function getViewDocPage() {
 function getCSS() {
   return `
     :root {
-      --accent: #3b82f6; --primary: #3b82f6; --success: #10b981; --danger: #ef4444; --warning: #f59e0b; --info: #06b6d4;
-      --radius: 12px; --transition: 0.25s; --shadow: 0 4px 15px rgba(0,0,0,0.2); --shadow-light: 0 2px 8px rgba(0,0,0,0.1);
+      --accent: #3b82f6;
+      --primary: #3b82f6;
+      --success: #10b981;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --info: #06b6d4;
+      --radius: 12px;
+      --transition: 0.25s;
+      --shadow: 0 4px 15px rgba(0,0,0,0.2);
+      --shadow-light: 0 2px 8px rgba(0,0,0,0.1);
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: "Poppins", sans-serif; background: #0f172a; color: #f1f5f9; margin: 0; min-height: 100vh; display: flex; flex-direction: column; }
-    body.light { background: #f8fafc; color: #1e293b; }
+    body {
+      font-family: "Poppins", sans-serif;
+      background: #0f172a;
+      color: #f1f5f9;
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    body.light {
+      background: #f8fafc;
+      color: #1e293b;
+    }
     .container { width: 90%; max-width: 1200px; margin: 30px auto; }
-    .card { background: #1e293b; border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow); margin-top: 20px; }
+    .card {
+      background: #1e293b;
+      border-radius: var(--radius);
+      padding: 20px;
+      box-shadow: var(--shadow);
+      margin-top: 20px;
+    }
     body.light .card { background: #fff; }
-    .topbar { background: var(--accent); color: #fff; padding: 15px 20px; border-radius: var(--radius); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
-    .topbar-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-    .welcome-text { margin-right: 10px; }
-    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px; }
+    .topbar {
+      background: var(--accent);
+      color: #fff;
+      padding: 15px 20px;
+      border-radius: var(--radius);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .topbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .welcome-text {
+      margin-right: 10px;
+    }
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 15px;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
     .card-header h3 { margin: 0; }
     .card-header > div { display: flex; gap: 10px; flex-wrap: wrap; }
     .form-row { display: flex; gap: 15px; margin-bottom: 15px; flex-wrap: wrap; }
     .form-row label { flex: 1; min-width: 200px; }
-    .btn { background: var(--accent); color: #fff; border: none; border-radius: var(--radius); padding: 8px 14px; cursor: pointer; text-decoration: none; font-weight: 500; transition: var(--transition); display: inline-block; text-align: center; }
+    .btn {
+      background: var(--accent); color: #fff; border: none; border-radius: var(--radius);
+      padding: 8px 14px; cursor: pointer; text-decoration: none; font-weight: 500;
+      transition: var(--transition); display: inline-block; text-align: center;
+    }
     .btn:hover { transform: scale(1.05); }
     .btn.full { width: 100%; margin-top: 10px; }
     .btn.primary { background: var(--primary); }
@@ -3152,9 +3389,17 @@ function getCSS() {
     .btn.ghost { background: transparent; border: 1px solid #fff; }
     body.light .btn.ghost { border-color: #1e293b; color: #1e293b; }
     .btn.small { padding: 5px 10px; font-size: 0.85em; }
-    input, select, textarea { width: 100%; padding: 10px; border-radius: var(--radius); border: 1px solid #475569; margin-top: 5px; background: #0f172a; color: #fff; }
-    body.light input, body.light select, body.light textarea { background: #fff; color: #000; border-color: #cbd5e1; }
-    .table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+    input, select, textarea {
+      width: 100%; padding: 10px; border-radius: var(--radius);
+      border: 1px solid #475569; margin-top: 5px;
+      background: #0f172a; color: #fff;
+    }
+    body.light input, body.light select, body.light textarea {
+      background: #fff; color: #000; border-color: #cbd5e1;
+    }
+    .table {
+      width: 100%; border-collapse: collapse; margin-top: 15px;
+    }
     .table th, .table td { padding: 12px; border-bottom: 1px solid #334155; text-align: left; }
     .table th { background: var(--accent); color: #fff; }
     .table tr:nth-child(even) { background: #1e293b; }
@@ -3162,17 +3407,71 @@ function getCSS() {
     .subtotal-row { background: #334155 !important; font-weight: bold; }
     body.light .subtotal-row { background: #e2e8f0 !important; }
     
-    .auth-container { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; background: linear-gradient(rgba(15, 23, 42, 0.9), rgba(15, 23, 42, 0.9)), url('https://images.pexels.com/photos/1103970/pexels-photo-1103970.jpeg') center/cover fixed; position: relative; }
-    body.light .auth-container { background: linear-gradient(rgba(248, 250, 252, 0.9), rgba(248, 250, 252, 0.9)), url('https://images.pexels.com/photos/1103970/pexels-photo-1103970.jpeg') center/cover fixed; }
-    .auth-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(6, 182, 212, 0.1)); z-index: 1; }
-    .auth-content { position: relative; z-index: 2; width: 100%; max-width: 500px; }
-    .auth-header { text-align: center; margin-bottom: 40px; }
-    .logo { font-size: 4rem; margin-bottom: 20px; text-shadow: 0 4px 8px rgba(0,0,0,0.3); }
-    .main-title { font-size: 2.5rem; font-weight: 700; background: linear-gradient(135deg, var(--primary), var(--info)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; margin-bottom: 10px; text-shadow: 0 2px 4px rgba(0,0,0,0.2); }
-    .subtitle { color: #94a3b8; font-size: 1.2rem; margin-top: 10px; }
+    /* Auth Styles */
+    .auth-container {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: linear-gradient(rgba(15, 23, 42, 0.9), rgba(15, 23, 42, 0.9)),
+                  url('https://images.pexels.com/photos/1103970/pexels-photo-1103970.jpeg') center/cover fixed;
+      position: relative;
+    }
+    body.light .auth-container {
+      background: linear-gradient(rgba(248, 250, 252, 0.9), rgba(248, 250, 252, 0.9)),
+                  url('https://images.pexels.com/photos/1103970/pexels-photo-1103970.jpeg') center/cover fixed;
+    }
+    .auth-overlay {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(6, 182, 212, 0.1));
+      z-index: 1;
+    }
+    .auth-content {
+      position: relative;
+      z-index: 2;
+      width: 100%;
+      max-width: 500px;
+    }
+    .auth-header {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+    .logo {
+      font-size: 4rem;
+      margin-bottom: 20px;
+      text-shadow: 0 4px 8px rgba(0,0,0,0.3);
+    }
+    .main-title {
+      font-size: 2.5rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--primary), var(--info));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 10px;
+      text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    .subtitle {
+      color: #94a3b8;
+      font-size: 1.2rem;
+      margin-top: 10px;
+    }
     body.light .subtitle { color: #64748b; }
-    .auth-card { background: rgba(30, 41, 59, 0.95); border-radius: var(--radius); padding: 40px; box-shadow: var(--shadow); width: 100%; backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
-    body.light .auth-card { background: rgba(255, 255, 255, 0.95); border: 1px solid rgba(0, 0, 0, 0.1); }
+    .auth-card {
+      background: rgba(30, 41, 59, 0.95);
+      border-radius: var(--radius);
+      padding: 40px;
+      box-shadow: var(--shadow);
+      width: 100%;
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    body.light .auth-card {
+      background: rgba(255, 255, 255, 0.95);
+      border: 1px solid rgba(0, 0, 0, 0.1);
+    }
     .input-group { margin-bottom: 20px; }
     .input-group label { display: block; margin-bottom: 8px; font-weight: 500; }
     .auth-links { text-align: center; margin-top: 20px; }
@@ -3181,8 +3480,11 @@ function getCSS() {
     .hint { color: #94a3b8; font-size: 0.8em; margin-top: 5px; display: block; }
     body.light .hint { color: #64748b; }
     
+    /* Login History Styles */
     .login-history-container { max-height: 400px; overflow-y: auto; }
-    .login-history-item { background: #1e293b; border-radius: var(--radius); padding: 15px; margin-bottom: 10px; border-left: 4px solid var(--success); }
+    .login-history-item {
+      background: #1e293b; border-radius: var(--radius); padding: 15px; margin-bottom: 10px; border-left: 4px solid var(--success);
+    }
     body.light .login-history-item { background: #f8fafc; }
     .login-history-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
     .user-info { display: flex; align-items: center; gap: 10px; }
@@ -3200,39 +3502,65 @@ function getCSS() {
     .empty-state, .loading, .error-state, .no-data { text-align: center; padding: 40px; color: #94a3b8; }
     .error-state { color: var(--danger); }
     
+    /* Value Summary Styles */
     .value-summary { display: flex; gap: 20px; flex-wrap: wrap; }
-    .value-item { flex: 1; min-width: 200px; background: var(--primary); color: white; padding: 20px; border-radius: var(--radius); text-align: center; box-shadow: var(--shadow); }
+    .value-item {
+      flex: 1; min-width: 200px; background: var(--primary); color: white;
+      padding: 20px; border-radius: var(--radius); text-align: center; box-shadow: var(--shadow);
+    }
     .value-item.primary { background: var(--primary); }
     .value-item.success { background: var(--success); }
     .value-item.info { background: var(--info); }
     .value-item h4 { margin: 0 0 10px 0; font-size: 1rem; opacity: 0.9; }
     .value-item p { margin: 0; font-size: 1.5rem; font-weight: bold; }
     
+    /* Table Enhancements */
     .no-data { text-align: center; color: #94a3b8; padding: 40px !important; }
     .category-tag { background: var(--info); color: white; padding: 4px 8px; border-radius: 20px; font-size: 0.8em; }
     .quantity-badge { background: var(--warning); color: white; padding: 4px 8px; border-radius: 20px; font-size: 0.8em; }
     .value-text { color: var(--success); }
     .potential-text { color: var(--info); }
     .date-text { color: #94a3b8; font-size: 0.9em; }
-    .action-buttons { display: flex; gap: 10px; flex-wrap: wrap; }
+    .action-buttons { display: flex; gap: 5px; flex-wrap: wrap; }
     
-    .search-section { background: #1e293b; padding: 15px; border-radius: var(--radius); margin-bottom: 20px; border-left: 4px solid var(--accent); }
+    /* Search Section Styles */
+    .search-section {
+      background: #1e293b; padding: 15px; border-radius: var(--radius);
+      margin-bottom: 20px; border-left: 4px solid var(--accent);
+    }
     body.light .search-section { background: #f1f5f9; }
     
-    .invoice-item { background: #1e293b; padding: 15px; border-radius: var(--radius); margin-bottom: 10px; border-left: 4px solid var(--accent); }
+    /* Invoice Items */
+    .invoice-item {
+      background: #1e293b; padding: 15px; border-radius: var(--radius);
+      margin-bottom: 10px; border-left: 4px solid var(--accent);
+    }
     body.light .invoice-item { background: #f1f5f9; }
     .invoice-items-list { max-height: 400px; overflow-y: auto; }
-    .invoice-total { margin-top: 20px; padding: 15px; background: #334155; border-radius: var(--radius); text-align: right; }
+    .invoice-total {
+      margin-top: 20px; padding: 15px; background: #334155;
+      border-radius: var(--radius); text-align: right;
+    }
     body.light .invoice-total { background: #e2e8f0; }
     
+    /* Danger Zone */
     .danger-zone { border-left: 4px solid var(--danger); background: rgba(239, 68, 68, 0.1); }
     .controls { display: flex; gap: 10px; margin-top: 15px; flex-wrap: wrap; }
     footer { text-align: center; padding: 20px; margin-top: auto; color: #94a3b8; }
     
-    .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); }
-    .modal-content { background: #1e293b; margin: 5% auto; padding: 0; border-radius: var(--radius); width: 90%; max-width: 600px; box-shadow: var(--shadow); }
+    /* Modal Styles */
+    .modal {
+      display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5);
+    }
+    .modal-content {
+      background: #1e293b; margin: 5% auto; padding: 0; border-radius: var(--radius);
+      width: 90%; max-width: 600px; box-shadow: var(--shadow);
+    }
     body.light .modal-content { background: #fff; }
-    .modal-header { background: var(--accent); color: white; padding: 15px 20px; border-radius: var(--radius) var(--radius) 0 0; display: flex; justify-content: space-between; align-items: center; }
+    .modal-header {
+      background: var(--accent); color: white; padding: 15px 20px;
+      border-radius: var(--radius) var(--radius) 0 0; display: flex; justify-content: space-between; align-items: center;
+    }
     .modal-header h3 { margin: 0; }
     .close { color: white; font-size: 28px; font-weight: bold; cursor: pointer; }
     .close:hover { color: #f1f5f9; }
@@ -3260,44 +3588,26 @@ function getCSS() {
 function getJavaScript() {
   return `
     function getCurrentUser() {
-      try {
-        return JSON.parse(localStorage.getItem('currentUser') || '{}');
-      } catch (error) {
-        return {};
-      }
+      try { return JSON.parse(localStorage.getItem('currentUser') || '{}'); } catch (error) { return {}; }
     }
-
     function requireLogin() {
       const user = getCurrentUser();
-      if (!user.username) {
-        window.location.href = '/';
-        return false;
-      }
+      if (!user.username) { window.location.href = '/'; return false; }
       return true;
     }
-
     function logout() {
-      localStorage.removeItem('currentUser');
-      window.location.href = '/';
+      localStorage.removeItem('currentUser'); window.location.href = '/';
     }
-
     function toggleTheme() {
       document.body.classList.toggle('light');
       localStorage.setItem('theme', document.body.classList.contains('light') ? 'light' : 'dark');
     }
-
-    // Load saved theme
     document.addEventListener('DOMContentLoaded', () => {
       const savedTheme = localStorage.getItem('theme');
-      if (savedTheme === 'light') {
-        document.body.classList.add('light');
-      }
-      
+      if (savedTheme === 'light') document.body.classList.add('light');
       const user = getCurrentUser();
       const usernameElement = document.getElementById('username');
-      if (usernameElement && user.username) {
-        usernameElement.textContent = user.username;
-      }
+      if (usernameElement && user.username) usernameElement.textContent = user.username;
     });
   `;
 }
@@ -3309,10 +3619,12 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('🔐 Security Code: ' + VALID_SECURITY_CODE);
   console.log('🌐 Main URL: http://localhost:' + PORT + '/');
   console.log('✅ ALL FEATURES INCLUDED:');
-  console.log('   ✅ SCANNABLE QR CODES ON PDFs added');
-  console.log('   ✅ View Document Page for verifying printed documents remotely');
-  console.log('   ✅ Missing `/api/statements/:id` GET endpoint added');
-  console.log('   ✅ Sequential Numbering System: REF-0000000000001, PUR-0000000000001, SAL-0000000000001');
-  console.log('   ✅ Company integrated into all pages and PDFs');
-  console.log('   ✅ PDF Footer Position: All PDFs now have footer at bottom center of page');
+  console.log('   ✅ User Authentication (Login/Register)');
+  console.log('   ✅ Search & Date Range Filter for Inventory');
+  console.log('   ✅ Complete PDF Reporting for Sales, Purchase, Reference & Inventory');
+  console.log('   ✅ SCANNABLE QR CODES on all PDFs linking to live digital copies');
+  console.log('   ✅ Responsive Web Viewers for Scanned QR codes (Mobile & PC friendly)');
+  console.log('   ✅ Statements & Reports Endpoint fixed and history fully functional');
+  console.log('   ✅ Professional PDF Layout with Grand Total & Centered Footer');
+  console.log('   ✅ Security Code for Account Deletion / Preserved Inventory');
 });
