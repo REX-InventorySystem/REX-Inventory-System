@@ -25,21 +25,6 @@ const COMPANY_INFO = {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Date Formatter Helper (Enforces DD/MM/YYYY everywhere)
-function formatToDDMMYYYY(dateInput) {
-  if (!dateInput) return new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Kuala_Lumpur' });
-  
-  // If it's an HTML date input format (YYYY-MM-DD), split and flip to strictly prevent timezone shifts
-  if (typeof dateInput === 'string' && dateInput.match(/^\d{4}-\d{2}-\d{2}$/)) {
-    const parts = dateInput.split('-');
-    return `${parts[2]}/${parts[1]}/${parts[0]}`;
-  }
-  
-  const d = new Date(dateInput);
-  if (isNaN(d.getTime())) return dateInput; // fallback
-  return d.toLocaleDateString('en-GB', { timeZone: 'Asia/Kuala_Lumpur' });
-}
-
 // Serve COMPLETE application from single endpoint
 app.get('/', (req, res) => {
   const currentPage = req.query.page || 'login';
@@ -103,7 +88,7 @@ app.get('/view/reference/:id', async (req, res) => {
   try {
     const docData = await db.collection('reference_reports').findOne({ _id: new ObjectId(req.params.id) });
     if (!docData) return res.status(404).send('Document not found');
-    res.send(getReferenceReportViewHTML(docData, COMPANY_INFO));
+    res.send(getDocumentViewHTML('REFERENCE REPORT', docData, COMPANY_INFO, 'reference'));
   } catch (error) {
     res.status(500).send('Error loading document view');
   }
@@ -123,7 +108,7 @@ app.get('/view/inventory-report/:id', async (req, res) => {
 function getDocumentViewHTML(title, docData, companyInfo, type) {
   let itemsHtml = '';
   let totalValue = docData.total || 0;
-  let docNumber = docData.salesNumber || docData.purchaseNumber;
+  let docNumber = docData.salesNumber || docData.purchaseNumber || docData.reportNumber;
   let entityLabel = type === 'sale' ? 'Customer' : type === 'purchase' ? 'Supplier' : '';
   let entityName = docData.customer || docData.supplier || '';
 
@@ -187,7 +172,7 @@ function getDocumentViewHTML(title, docData, companyInfo, type) {
           </div>
           <div>
             <div class="info-label">Date Issued</div>
-            <div class="info-value">${formatToDDMMYYYY(docData.date || docData.createdAt)}</div>
+            <div class="info-value">${docData.date || new Date(docData.createdAt).toLocaleDateString('en-US', { timeZone: 'Asia/Kuala_Lumpur' })}</div>
           </div>
           ${entityLabel ? `
           <div>
@@ -209,102 +194,6 @@ function getDocumentViewHTML(title, docData, companyInfo, type) {
         <div class="total-section">
           <span class="total-label">Grand Total:</span>
           <span class="total-value">RM ${parseFloat(totalValue).toFixed(2)}</span>
-        </div>
-        <div class="footer">
-          Generated securely by ${companyInfo.name} System<br>
-          ✓ Scanned from verified digital document QR Code
-        </div>
-      </div>
-    </body>
-    </html>`;
-}
-
-// Brand New Reference Report Layout to match Inventory Report
-function getReferenceReportViewHTML(reportData, companyInfo) {
-  let itemsHtml = '';
-  let totalItems = 0;
-  let grandTotal = 0;
-
-  reportData.items.forEach((item, index) => {
-     let qty = item.quantity || item.invoiceQty || 1;
-     let price = item.unitPrice || 0;
-     let itemTotal = qty * price;
-     
-     totalItems += qty;
-     grandTotal += itemTotal;
-
-     itemsHtml += `
-       <div class="item-row">
-         <div class="item-info">
-           <div class="item-name">${index + 1}. ${item.name} <span class="item-sku">(${item.sku})</span></div>
-           <div class="item-meta">Category: ${item.category || 'N/A'} | Qty: <strong>${qty}</strong> | Unit Price: RM ${price.toFixed(2)}</div>
-         </div>
-         <div class="item-total" style="text-align: right;">
-            <div style="color:#3b82f6; font-size:15px; font-weight:bold;">RM ${itemTotal.toFixed(2)}</div>
-         </div>
-       </div>
-     `;
-  });
-
-  return `<!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Reference Report | ${companyInfo.name}</title>
-      <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f8fafc; margin: 0; padding: 20px; color: #1e293b; }
-        .container { max-width: 800px; margin: 0 auto; background: #fff; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
-        .header { text-align: center; border-bottom: 2px solid #e2e8f0; padding-bottom: 20px; margin-bottom: 20px; }
-        .company-name { font-size: 26px; font-weight: bold; color: #3b82f6; margin-bottom: 5px; }
-        .company-details { font-size: 14px; color: #64748b; line-height: 1.5; }
-        .doc-title { font-size: 22px; font-weight: 800; margin: 25px 0; text-align: center; color: #0f172a; text-transform: uppercase; letter-spacing: 1px; }
-        .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 30px; font-size: 14px; background: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; }
-        .info-label { font-weight: bold; color: #64748b; font-size: 12px; text-transform: uppercase; }
-        .info-value { font-weight: 600; font-size: 15px; margin-top: 4px; color: #1e293b; }
-        .items-section { margin-bottom: 30px; }
-        .items-header { display: flex; font-weight: bold; color: #64748b; font-size: 13px; text-transform: uppercase; padding-bottom: 10px; border-bottom: 2px solid #e2e8f0; margin-bottom: 10px; }
-        .item-row { display: flex; justify-content: space-between; border-bottom: 1px solid #f1f5f9; padding: 12px 0; align-items: center; }
-        .item-info { flex: 1; }
-        .item-name { font-weight: 600; color: #1e293b; }
-        .item-sku { color: #94a3b8; font-size: 12px; margin-left: 5px; font-weight: normal; }
-        .item-meta { color: #64748b; font-size: 13px; margin-top: 6px; }
-        .item-total { text-align: right; }
-        .summary-box { background: #1e293b; padding: 20px; border-radius: 8px; margin-top: 20px; color: #fff; }
-        .summary-title { margin: 0 0 15px 0; font-size: 18px; color: #3b82f6; border-bottom: 1px solid #334155; padding-bottom: 10px; }
-        .summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
-        .sum-label { color: #94a3b8; font-size: 12px; text-transform: uppercase; }
-        .sum-val { font-size: 18px; font-weight: bold; margin-top: 5px; }
-        .footer { text-align: center; margin-top: 40px; font-size: 12px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 20px; }
-        @media (max-width: 600px) { .info-grid, .summary-grid { grid-template-columns: 1fr; } body { padding: 10px; } .container { padding: 15px; } }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        <div class="header">
-          <div class="company-name">${companyInfo.logoText}</div>
-          <div class="company-details">${companyInfo.address}<br>${companyInfo.phone} | ${companyInfo.email}</div>
-        </div>
-        <div class="doc-title">REFERENCE REPORT</div>
-        <div class="info-grid">
-          <div><div class="info-label">Reference No</div><div class="info-value" style="color: #3b82f6;">${reportData.reportNumber || 'N/A'}</div></div>
-          <div><div class="info-label">Generated Date</div><div class="info-value">${formatToDDMMYYYY(reportData.date || reportData.createdAt)}</div></div>
-          <div><div class="info-label">Generated By</div><div class="info-value">${reportData.createdBy || 'System'}</div></div>
-        </div>
-        <div class="items-section">
-          <div class="items-header">
-            <div style="flex:1">Item Details</div>
-            <div>Totals</div>
-          </div>
-          ${itemsHtml}
-        </div>
-        <div class="summary-box">
-          <h3 class="summary-title">Reference Summary</h3>
-          <div class="summary-grid">
-            <div><div class="sum-label">Total Product Types</div><div class="sum-val">${reportData.items.length}</div></div>
-            <div><div class="sum-label">Total Units</div><div class="sum-val">${totalItems}</div></div>
-            <div><div class="sum-label">Grand Total</div><div class="sum-val" style="color:#3b82f6;">RM ${grandTotal.toFixed(2)}</div></div>
-          </div>
         </div>
         <div class="footer">
           Generated securely by ${companyInfo.name} System<br>
@@ -385,7 +274,7 @@ function getInventoryReportViewHTML(reportData, companyInfo) {
         <div class="doc-title">INVENTORY REPORT</div>
         <div class="info-grid">
           <div><div class="info-label">Report ID</div><div class="info-value" style="color: #06b6d4;">${reportData.id || reportData._id}</div></div>
-          <div><div class="info-label">Generated Date</div><div class="info-value">${formatToDDMMYYYY(reportData.date || reportData.createdAt)}</div></div>
+          <div><div class="info-label">Generated Date</div><div class="info-value">${reportData.date || new Date().toLocaleDateString('en-US', { timeZone: 'Asia/Kuala_Lumpur' })}</div></div>
           <div><div class="info-label">Date Range</div><div class="info-value">${reportData.dateRange || 'All Items'}</div></div>
           <div><div class="info-label">Generated By</div><div class="info-value">${reportData.createdBy || 'System'}</div></div>
         </div>
@@ -625,8 +514,7 @@ app.post('/api/inventory/add', async (req, res) => {
   try {
     const item = {
       ...req.body,
-      // Fixed default to true DD/MM/YYYY string format
-      dateAdded: formatToDDMMYYYY(new Date()),
+      dateAdded: new Date().toLocaleDateString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }),
       createdAt: new Date()
     };
     
@@ -1061,8 +949,8 @@ function addFooter(doc, pageBottom = 750) {
      .lineWidth(0.5)
      .stroke();
   
-  // Enforcing strict matching to PC time by formatting cleanly to Malaysia time zone (en-GB prints DD/MM/YYYY)
-  const formattedDate = new Date().toLocaleString('en-GB', { timeZone: 'Asia/Kuala_Lumpur' });
+  // Enforcing strict matching to PC time by formatting cleanly to Malaysia time zone
+  const formattedDate = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' });
   
   doc.fillColor('#64748b')
      .fontSize(8)
@@ -1107,7 +995,7 @@ app.post('/generate-reference-report-pdf', async (req, res) => {
     
     const leftColumn = 50, rightColumn = 300;
     
-    const displayDate = formatToDDMMYYYY(referenceData.date || referenceData.createdAt);
+    const displayDate = referenceData.date || new Date().toLocaleDateString('en-US', { timeZone: 'Asia/Kuala_Lumpur' });
     
     doc.fillColor('#1e293b').fontSize(11).font('Helvetica').text('Reference Number:', leftColumn, doc.y, { continued: true }).fillColor('#3b82f6').font('Helvetica-Bold').text(` ${referenceData.reportNumber || 'REF-N/A'}`)
        .fillColor('#1e293b').font('Helvetica').text('Report Date:', leftColumn, doc.y + 20, { continued: true }).fillColor('#64748b').text(` ${displayDate}`)
@@ -1187,7 +1075,7 @@ app.post('/generate-purchase-pdf', async (req, res) => {
     doc.moveDown(1);
     
     const leftColumn = 50, rightColumn = 300;
-    const displayDate = formatToDDMMYYYY(purchaseData.date || purchaseData.createdAt);
+    const displayDate = purchaseData.date || new Date().toLocaleDateString('en-US', { timeZone: 'Asia/Kuala_Lumpur' });
 
     doc.fillColor('#1e293b').fontSize(11).font('Helvetica').text('Purchase Number:', leftColumn, doc.y, { continued: true }).fillColor('#10b981').font('Helvetica-Bold').text(` ${purchaseData.purchaseNumber || 'PUR-N/A'}`)
        .fillColor('#1e293b').font('Helvetica').text('Order Date:', leftColumn, doc.y + 20, { continued: true }).fillColor('#64748b').text(` ${displayDate}`)
@@ -1269,7 +1157,7 @@ app.post('/generate-sales-pdf', async (req, res) => {
     doc.moveDown(1);
     
     const leftColumn = 50, rightColumn = 300;
-    const displayDate = formatToDDMMYYYY(salesData.date || salesData.createdAt);
+    const displayDate = salesData.date || new Date().toLocaleDateString('en-US', { timeZone: 'Asia/Kuala_Lumpur' });
 
     doc.fillColor('#1e293b').fontSize(11).font('Helvetica').text('Sales Number:', leftColumn, doc.y, { continued: true }).fillColor('#ef4444').font('Helvetica-Bold').text(` ${salesData.salesNumber || 'SAL-N/A'}`)
        .fillColor('#1e293b').font('Helvetica').text('Sale Date:', leftColumn, doc.y + 20, { continued: true }).fillColor('#64748b').text(` ${displayDate}`)
@@ -1357,7 +1245,7 @@ app.post('/generate-inventory-report-pdf', async (req, res) => {
     const col2LabelX = 320;
     const col2ValueX = 405;
     
-    const displayDate = formatToDDMMYYYY(reportData.date || reportData.createdAt);
+    const displayDate = reportData.date || new Date().toLocaleDateString('en-US', { timeZone: 'Asia/Kuala_Lumpur' });
 
     // Row 1
     doc.fillColor('#1e293b').fontSize(11).font('Helvetica-Bold').text('Report ID:', col1LabelX, startY);
@@ -1848,7 +1736,7 @@ function getDashboardPage() {
                 </div>
                 <div class="detail-item">
                   <span class="detail-label">Time:</span>
-                  <span class="detail-value">\${new Date(entry.loginTime).toLocaleString('en-GB')}</span>
+                  <span class="detail-value">\${new Date(entry.loginTime).toLocaleString()}</span>
                 </div>
                 <div class="detail-item">
                   <span class="detail-label">Device:</span>
@@ -1926,12 +1814,6 @@ function getDashboardPage() {
           totalInventoryValue += inventoryValue;
           totalPotentialValue += potentialValue;
 
-          // Safe Date Parse to DD/MM/YYYY locally on frontend
-          let safeDate = item.dateAdded;
-          if (!safeDate && item.createdAt) {
-             safeDate = new Date(item.createdAt).toLocaleDateString('en-GB');
-          }
-
           body.innerHTML += \`
             <tr>
               <td>\${i + 1}</td>
@@ -1943,7 +1825,7 @@ function getDashboardPage() {
               <td>RM \${(item.unitPrice || 0).toFixed(2)}</td>
               <td><strong class="value-text">RM \${inventoryValue.toFixed(2)}</strong></td>
               <td><strong class="potential-text">RM \${potentialValue.toFixed(2)}</strong></td>
-              <td class="date-text">\${safeDate}</td>
+              <td class="date-text">\${item.dateAdded || new Date(item.createdAt).toLocaleDateString()}</td>
               <td class="action-buttons">
                 <button class="btn small" onclick="openEditModal('\${item._id}')">✏️ Edit</button>
                 <button class="btn small danger" onclick="deleteItem('\${item._id}')">🗑️ Delete</button>
@@ -2117,7 +1999,7 @@ function getDashboardPage() {
 
         const reportData = {
           id: 'REP-' + Date.now(),
-          date: new Date().toLocaleDateString('en-GB'),
+          date: new Date().toLocaleString(),
           dateRange: dateRange,
           items: items,
           totalInventoryValue: \`RM \${totalInventoryValue.toFixed(2)}\`,
@@ -2346,7 +2228,7 @@ function getReferencePage() {
       try {
         const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
         const referenceData = {
-          date: new Date().toLocaleDateString('en-GB'),
+          date: new Date().toLocaleString(),
           items: selectedReferenceItems,
           total: parseFloat(document.getElementById('referenceTotal').textContent) || 0,
           createdBy: user.username
@@ -2434,7 +2316,7 @@ function getPurchasePage() {
       <h3>Purchase Details</h3>
       <div class="form-row">
         <label>Supplier <input type="text" id="supplier" placeholder="Supplier name"></label>
-        <label>Purchase Date <input type="date" id="purchaseDate" value="${new Date().toISOString().split('T')[0]}"></label>
+        <label>Purchase Date <input type="date" id="purchaseDate" value="${new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }).split(',')[0]}"></label>
       </div>
     </div>
 
@@ -2581,7 +2463,7 @@ function getPurchasePage() {
       try {
         const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
         const purchaseData = {
-          date: document.getElementById('purchaseDate').value,
+          date: document.getElementById('purchaseDate').value || new Date().toLocaleString(),
           supplier: document.getElementById('supplier').value || 'N/A',
           items: selectedPurchaseItems,
           total: parseFloat(document.getElementById('purchaseTotal').textContent) || 0,
@@ -2685,7 +2567,7 @@ function getSalesPage() {
       <h3>Sales Details</h3>
       <div class="form-row">
         <label>Customer <input type="text" id="customer" placeholder="Customer name"></label>
-        <label>Sales Date <input type="date" id="salesDate" value="${new Date().toISOString().split('T')[0]}"></label>
+        <label>Sales Date <input type="date" id="salesDate" value="${new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }).split(',')[0]}"></label>
       </div>
     </div>
 
@@ -2837,7 +2719,7 @@ function getSalesPage() {
       try {
         const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
         const salesData = {
-          date: document.getElementById('salesDate').value,
+          date: document.getElementById('salesDate').value || new Date().toLocaleString(),
           customer: document.getElementById('customer').value || 'N/A',
           items: selectedSalesItems,
           total: parseFloat(document.getElementById('salesTotal').textContent) || 0,
@@ -2963,13 +2845,6 @@ function getStatementPage() {
 
   <script>${getJavaScript()}</script>
   <script>
-    function formatDateString(dateStr) {
-      if (!dateStr) return 'N/A';
-      const d = new Date(dateStr);
-      if (isNaN(d.getTime())) return dateStr;
-      return d.toLocaleDateString('en-GB');
-    }
-
     async function loadReports() {
       try {
         const response = await fetch('/api/statements');
@@ -2991,7 +2866,7 @@ function getStatementPage() {
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
                   <strong>\${report.id || 'N/A'}</strong><br>
-                  <small>Generated: \${formatDateString(report.date || report.createdAt)}</small><br>
+                  <small>Generated: \${report.date || new Date(report.createdAt).toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' })}</small><br>
                   <small>Items: \${report.items?.length || 0} | \${report.totalInventoryValue || 'RM 0.00'} | \${report.totalPotentialValue || 'RM 0.00'}</small>
                 </div>
                 <div>
@@ -3030,7 +2905,7 @@ function getStatementPage() {
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
                   <strong>\${report.reportNumber || 'N/A'}</strong><br>
-                  <small>Date: \${formatDateString(report.date || report.createdAt)}</small><br>
+                  <small>Date: \${report.date || new Date(report.createdAt).toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' })}</small><br>
                   <small>Items: \${report.items?.length || 0} | Total: RM \${(report.total || 0).toFixed(2)}</small>
                 </div>
                 <div>
@@ -3069,7 +2944,7 @@ function getStatementPage() {
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
                   <strong>\${purchase.purchaseNumber || 'N/A'}</strong><br>
-                  <small>Date: \${formatDateString(purchase.date || purchase.createdAt)} | Supplier: \${purchase.supplier || 'N/A'}</small><br>
+                  <small>Date: \${purchase.date || new Date(purchase.createdAt).toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' })} | Supplier: \${purchase.supplier || 'N/A'}</small><br>
                   <small>Items: \${purchase.items?.length || 0} | Total: RM \${(purchase.total || 0).toFixed(2)}</small>
                 </div>
                 <div>
@@ -3108,7 +2983,7 @@ function getStatementPage() {
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
                   <strong>\${sale.salesNumber || 'N/A'}</strong><br>
-                  <small>Date: \${formatDateString(sale.date || sale.createdAt)} | Customer: \${sale.customer || 'N/A'}</small><br>
+                  <small>Date: \${sale.date || new Date(sale.createdAt).toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' })} | Customer: \${sale.customer || 'N/A'}</small><br>
                   <small>Items: \${sale.items?.length || 0} | Total: RM \${(sale.total || 0).toFixed(2)}</small>
                 </div>
                 <div>
@@ -3807,6 +3682,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('   ✅ User Authentication (Login/Register)');
   console.log('   ✅ Complete PDF Reporting for Sales, Purchase, Reference & Inventory');
   console.log('   ✅ SCANNABLE QR CODES on all PDFs linking to live digital copies');
-  console.log('   ✅ FIXED: Dates synchronized securely to local PC Time format (DD/MM/YYYY)');
-  console.log('   ✅ FIXED: Reference Report QR Layout perfectly matches Inventory summary box');
+  console.log('   ✅ FIXED: Strict grid alignment for Inventory Report header metadata');
+  console.log('   ✅ FIXED: Dates synchronized securely to local Malaysian PC Time Zone');
+  console.log('   ✅ FIXED: QR web view text uses "Total Value" & "Potential Value"');
 });
