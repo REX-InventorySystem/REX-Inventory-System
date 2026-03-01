@@ -1231,15 +1231,40 @@ app.post('/generate-inventory-report-pdf', async (req, res) => {
     doc.moveTo(50, doc.y).lineTo(550, doc.y).strokeColor('#e2e8f0').lineWidth(1).stroke();
     doc.moveDown(1);
     
-    const leftColumn = 50, rightColumn = 300;
-    doc.fillColor('#1e293b').fontSize(11).font('Helvetica').text('Report ID:', leftColumn, doc.y, { continued: true }).fillColor('#64748b').text(` ${reportData.id || 'N/A'}`)
-       .fillColor('#1e293b').text('Generated:', leftColumn, doc.y + 20, { continued: true }).fillColor('#64748b').text(` ${reportData.date || new Date().toLocaleDateString()}`)
-       .fillColor('#1e293b').text('Date Range:', leftColumn, doc.y + 40, { continued: true }).fillColor('#64748b').text(` ${reportData.dateRange || 'All Items'}`)
-       .fillColor('#1e293b').text('Total Items:', rightColumn, doc.y - 60, { continued: true }).fillColor('#64748b').text(` ${reportData.items.length}`)
-       .fillColor('#1e293b').text('Report Type:', rightColumn, doc.y + 20, { continued: true }).fillColor('#64748b').text(' Comprehensive Inventory')
-       .fillColor('#1e293b').text('Prepared By:', rightColumn, doc.y + 40, { continued: true }).fillColor('#64748b').text(` ${reportData.createdBy || 'Inventory System'}`);
+    // ==========================================
+    // FIXED: Strict Alignment Grid for Header Info
+    // ==========================================
+    const startY = doc.y;
+    const col1LabelX = 50;
+    const col1ValueX = 135;
+    const col2LabelX = 320;
+    const col2ValueX = 405;
+
+    // Row 1
+    doc.fillColor('#1e293b').fontSize(11).font('Helvetica-Bold').text('Report ID:', col1LabelX, startY);
+    doc.fillColor('#06b6d4').font('Helvetica').text(reportData.id || 'N/A', col1ValueX, startY);
     
-    doc.moveDown(2);
+    doc.fillColor('#1e293b').font('Helvetica-Bold').text('Total Items:', col2LabelX, startY);
+    doc.fillColor('#64748b').font('Helvetica').text(`${reportData.items.length}`, col2ValueX, startY);
+
+    // Row 2
+    doc.fillColor('#1e293b').font('Helvetica-Bold').text('Generated:', col1LabelX, startY + 20);
+    doc.fillColor('#64748b').font('Helvetica').text(reportData.date || new Date().toLocaleDateString(), col1ValueX, startY + 20);
+    
+    doc.fillColor('#1e293b').font('Helvetica-Bold').text('Report Type:', col2LabelX, startY + 20);
+    doc.fillColor('#64748b').font('Helvetica').text('Comprehensive', col2ValueX, startY + 20);
+
+    // Row 3
+    doc.fillColor('#1e293b').font('Helvetica-Bold').text('Date Range:', col1LabelX, startY + 40);
+    doc.fillColor('#64748b').font('Helvetica').text(reportData.dateRange || 'All Items', col1ValueX, startY + 40);
+    
+    doc.fillColor('#1e293b').font('Helvetica-Bold').text('Prepared By:', col2LabelX, startY + 40);
+    doc.fillColor('#64748b').font('Helvetica').text(reportData.createdBy || 'Inventory System', col2ValueX, startY + 40);
+    
+    // Reset Y position for the table
+    doc.y = startY + 70;
+    // ==========================================
+
     const tableTop = doc.y;
     doc.fillColor('#ffffff').rect(50, tableTop, 500, 25).fill('#06b6d4');
     
@@ -3651,7 +3676,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('   ✅ User Authentication (Login/Register)');
   console.log('   ✅ Complete PDF Reporting for Sales, Purchase, Reference & Inventory');
   console.log('   ✅ SCANNABLE QR CODES on all PDFs linking to live digital copies');
-  console.log('   ✅ Redesigned Inventory Report Header/Summary to fix overlap issue');
+  console.log('   ✅ FIXED: Strict grid alignment for Inventory Report header metadata');
   console.log('   ✅ Static "Page 1" Footer and format fixed to requested standard');
   console.log('   ✅ Company Details correctly updated to Rex Enterprise & 888 Business Street');
 });
