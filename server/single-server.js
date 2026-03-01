@@ -113,7 +113,8 @@ function getDocumentViewHTML(title, docData, companyInfo, type) {
   let entityName = docData.customer || docData.supplier || '';
 
   docData.items.forEach(item => {
-     let qty = item.quantity || item.invoiceQty || 1;
+     // Fixed: prioritize invoiceQty to show specifically the amount recorded for Reference Report
+     let qty = item.invoiceQty || item.quantity || 1;
      let price = item.unitPrice || item.unitCost || 0;
      let itemTotal = qty * price;
      itemsHtml += `
@@ -3682,7 +3683,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('   ✅ User Authentication (Login/Register)');
   console.log('   ✅ Complete PDF Reporting for Sales, Purchase, Reference & Inventory');
   console.log('   ✅ SCANNABLE QR CODES on all PDFs linking to live digital copies');
+  console.log('   ✅ FIXED: Reference Report QR web view accurately reflects item invoice quantities');
   console.log('   ✅ FIXED: Strict grid alignment for Inventory Report header metadata');
   console.log('   ✅ FIXED: Dates synchronized securely to local Malaysian PC Time Zone');
-  console.log('   ✅ FIXED: QR web view text uses "Total Value" & "Potential Value"');
 });
