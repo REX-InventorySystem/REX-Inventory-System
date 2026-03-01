@@ -12,13 +12,13 @@ const VALID_SECURITY_CODE = "INV2025";
 
 let db;
 
-// Company Information
+// Company Information - UPDATED
 const COMPANY_INFO = {
-  name: "TRex Enterprise",
-  address: "123 Business Street, Kuala Lumpur, Malaysia",
+  name: "Rex Enterprise",
+  address: "888 Business Street, Kuching, Sarawak, Malaysia",
   phone: "+60 12-345 6789",
-  email: "info@trexenterprise.com",
-  logoText: "🏢 TREX ENTERPRISE"
+  email: "info@rexenterprise.com",
+  logoText: "🏢 REX ENTERPRISE"
 };
 
 // Middleware
@@ -919,7 +919,7 @@ function drawCompanyHeader(doc) {
   doc.fillColor('#ffffff')
      .fontSize(24)
      .font('Helvetica-Bold')
-     .text('TREX ENTERPRISE', 60, 55);
+     .text('REX ENTERPRISE', 60, 55);
   
   // Company tagline
   doc.fillColor('#dbeafe')
@@ -949,7 +949,10 @@ function addFooter(doc, pageBottom = 750) {
      .lineWidth(0.5)
      .stroke();
   
-  // Footer text - centered
+  // Footer text - centered matching the requested format:
+  // "Generated on: 3/1/2026, 7:21:07 AM | Page 1"
+  const formattedDate = new Date().toLocaleString('en-US');
+  
   doc.fillColor('#64748b')
      .fontSize(8)
      .font('Helvetica')
@@ -961,7 +964,7 @@ function addFooter(doc, pageBottom = 750) {
        width: 500,
        align: 'center'
      })
-     .text(`Generated on: ${new Date().toLocaleString()} | Page ${doc.bufferedPageRange().count + 1}`, 50, footerY + 20, {
+     .text(`Generated on: ${formattedDate} | Page 1`, 50, footerY + 20, {
        width: 500,
        align: 'center'
      });
@@ -1239,9 +1242,17 @@ app.post('/generate-inventory-report-pdf', async (req, res) => {
     doc.moveDown(2);
     const tableTop = doc.y;
     doc.fillColor('#ffffff').rect(50, tableTop, 500, 25).fill('#06b6d4');
+    
+    // Adjusted Table Header Layout
     doc.fillColor('#ffffff').fontSize(9).font('Helvetica-Bold')
-       .text('#', 55, tableTop + 8).text('SKU', 70, tableTop + 8).text('Product Name', 120, tableTop + 8).text('Category', 220, tableTop + 8).text('Stock', 300, tableTop + 8)
-       .text('Cost', 340, tableTop + 8).text('Price', 390, tableTop + 8).text('Value', 450, tableTop + 8);
+       .text('#', 55, tableTop + 8)
+       .text('SKU', 75, tableTop + 8)
+       .text('Product Name', 125, tableTop + 8)
+       .text('Category', 235, tableTop + 8)
+       .text('Stock', 300, tableTop + 8)
+       .text('Cost(RM)', 340, tableTop + 8)
+       .text('Price(RM)', 400, tableTop + 8)
+       .text('Value(RM)', 460, tableTop + 8);
     
     let yPosition = tableTop + 35;
     let totalInventoryValue = 0, totalPotentialValue = 0, totalItems = 0;
@@ -1255,10 +1266,16 @@ app.post('/generate-inventory-report-pdf', async (req, res) => {
       
       if (index % 2 === 0) doc.fillColor('#f8fafc').rect(50, yPosition - 5, 500, 20).fill();
       
+      // Adjusted Table Rows Layout (No "RM" to save space)
       doc.fillColor('#1e293b').font('Helvetica').fontSize(8)
-         .text((index + 1).toString(), 55, yPosition).text(item.sku || 'N/A', 70, yPosition).text((item.name || 'Unnamed Item').length > 25 ? (item.name || 'Unnamed Item').substring(0, 22) + '...' : (item.name || 'Unnamed Item'), 120, yPosition)
-         .text((item.category || 'N/A').length > 15 ? (item.category || 'N/A').substring(0, 12) + '...' : (item.category || 'N/A'), 220, yPosition).text(quantity.toString(), 300, yPosition)
-         .text(`RM ${unitCost.toFixed(2)}`, 340, yPosition).text(`RM ${unitPrice.toFixed(2)}`, 390, yPosition).text(`RM ${inventoryValue.toFixed(2)}`, 450, yPosition);
+         .text((index + 1).toString(), 55, yPosition)
+         .text((item.sku || 'N/A').substring(0, 10), 75, yPosition)
+         .text((item.name || 'Unnamed Item').substring(0, 20) + ((item.name || '').length > 20 ? '...' : ''), 125, yPosition)
+         .text((item.category || 'N/A').substring(0, 10) + ((item.category || '').length > 10 ? '...' : ''), 235, yPosition)
+         .text(quantity.toString(), 300, yPosition)
+         .text(`${unitCost.toFixed(2)}`, 340, yPosition)
+         .text(`${unitPrice.toFixed(2)}`, 400, yPosition)
+         .text(`${inventoryValue.toFixed(2)}`, 460, yPosition);
       yPosition += 20;
     });
     
@@ -1267,20 +1284,32 @@ app.post('/generate-inventory-report-pdf', async (req, res) => {
       yPosition += 20;
     }
     
-    // Summary section & QR
+    // Fixed Summary Layout & Alignment
     const summaryY = Math.min(yPosition + 30, 650);
     doc.fillColor('#f8fafc').rect(50, summaryY, 500, 100).fill();
     doc.strokeColor('#e2e8f0').rect(50, summaryY, 500, 100).stroke();
     
-    doc.fillColor('#1e293b').fontSize(12).font('Helvetica-Bold').text('INVENTORY SUMMARY', 55, summaryY + 15);
-    doc.fillColor('#64748b').fontSize(9).font('Helvetica')
-       .text('Total Items in Report:', 55, summaryY + 35, { continued: true }).fillColor('#1e293b').text(` ${reportData.items.length} products`)
-       .fillColor('#64748b').text('Total Stock Quantity:', 55, summaryY + 50, { continued: true }).fillColor('#1e293b').text(` ${totalItems} units`)
-       .fillColor('#64748b').text('Total Inventory Value:', 230, summaryY + 35, { continued: true }).fillColor('#ef4444').text(` RM ${totalInventoryValue.toFixed(2)}`)
-       .fillColor('#64748b').text('Total Potential Value:', 230, summaryY + 50, { continued: true }).fillColor('#10b981').text(` RM ${totalPotentialValue.toFixed(2)}`)
-       .fillColor('#64748b').text('Profit Potential:', 230, summaryY + 65, { continued: true }).fillColor('#3b82f6').text(` RM ${(totalPotentialValue - totalInventoryValue).toFixed(2)}`);
+    // Summary Title
+    doc.fillColor('#1e293b').fontSize(12).font('Helvetica-Bold').text('INVENTORY SUMMARY', 60, summaryY + 15);
     
-    // QR Code inside summary box on the right
+    // Left Summary Column
+    doc.fillColor('#64748b').fontSize(9).font('Helvetica').text('Total Products:', 60, summaryY + 40);
+    doc.fillColor('#1e293b').text(`${reportData.items.length}`, 145, summaryY + 40);
+    
+    doc.fillColor('#64748b').text('Total Units:', 60, summaryY + 55);
+    doc.fillColor('#1e293b').text(`${totalItems}`, 145, summaryY + 55);
+    
+    // Middle Summary Column
+    doc.fillColor('#64748b').text('Inventory Value:', 215, summaryY + 40);
+    doc.fillColor('#ef4444').text(`RM ${totalInventoryValue.toFixed(2)}`, 305, summaryY + 40);
+    
+    doc.fillColor('#64748b').text('Potential Value:', 215, summaryY + 55);
+    doc.fillColor('#10b981').text(`RM ${totalPotentialValue.toFixed(2)}`, 305, summaryY + 55);
+    
+    doc.fillColor('#64748b').text('Profit Potential:', 215, summaryY + 70);
+    doc.fillColor('#3b82f6').text(`RM ${(totalPotentialValue - totalInventoryValue).toFixed(2)}`, 305, summaryY + 70);
+    
+    // QR Code exactly on the right side of the summary box
     if (reportData._id || reportData.id) {
         const docId = reportData._id || reportData.id;
         const hostUrl = req.get('host') || `localhost:${PORT}`;
@@ -3620,11 +3649,9 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('🌐 Main URL: http://localhost:' + PORT + '/');
   console.log('✅ ALL FEATURES INCLUDED:');
   console.log('   ✅ User Authentication (Login/Register)');
-  console.log('   ✅ Search & Date Range Filter for Inventory');
   console.log('   ✅ Complete PDF Reporting for Sales, Purchase, Reference & Inventory');
   console.log('   ✅ SCANNABLE QR CODES on all PDFs linking to live digital copies');
-  console.log('   ✅ Responsive Web Viewers for Scanned QR codes (Mobile & PC friendly)');
-  console.log('   ✅ Statements & Reports Endpoint fixed and history fully functional');
-  console.log('   ✅ Professional PDF Layout with Grand Total & Centered Footer');
-  console.log('   ✅ Security Code for Account Deletion / Preserved Inventory');
+  console.log('   ✅ Redesigned Inventory Report Header/Summary to fix overlap issue');
+  console.log('   ✅ Static "Page 1" Footer and format fixed to requested standard');
+  console.log('   ✅ Company Details correctly updated to Rex Enterprise & 888 Business Street');
 });
