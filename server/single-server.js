@@ -88,7 +88,7 @@ app.get('/view/reference/:id', async (req, res) => {
   try {
     const docData = await db.collection('reference_reports').findOne({ _id: new ObjectId(req.params.id) });
     if (!docData) return res.status(404).send('Document not found');
-    res.send(getDocumentViewHTML('REFERENCE REPORT', docData, COMPANY_INFO, 'reference'));
+    res.send(getReferenceReportViewHTML(docData, COMPANY_INFO));
   } catch (error) {
     res.status(500).send('Error loading document view');
   }
@@ -194,6 +194,105 @@ function getDocumentViewHTML(title, docData, companyInfo, type) {
         <div class="total-section">
           <span class="total-label">Grand Total:</span>
           <span class="total-value">RM ${parseFloat(totalValue).toFixed(2)}</span>
+        </div>
+        <div class="footer">
+          Generated securely by ${companyInfo.name} System<br>
+          ✓ Scanned from verified digital document QR Code
+        </div>
+      </div>
+    </body>
+    </html>`;
+}
+
+function getReferenceReportViewHTML(reportData, companyInfo) {
+  let itemsHtml = '';
+  let totalInventoryValue = 0;
+  let totalPotentialValue = 0;
+  let totalItems = 0;
+
+  reportData.items.forEach((item, index) => {
+     let qty = item.invoiceQty || item.quantity || 1;
+     let cost = item.unitCost || 0;
+     let price = item.unitPrice || 0;
+     totalInventoryValue += (qty * cost);
+     totalPotentialValue += (qty * price);
+     totalItems += qty;
+
+     itemsHtml += `
+       <div class="item-row">
+         <div class="item-info">
+           <div class="item-name">${index + 1}. ${item.name} <span class="item-sku">(${item.sku})</span></div>
+           <div class="item-meta">Category: ${item.category || 'N/A'} | Qty: <strong>${qty}</strong> | Cost: RM ${cost.toFixed(2)} | Price: RM ${price.toFixed(2)}</div>
+         </div>
+         <div class="item-total" style="text-align: right;">
+            <div style="color:#ef4444; font-size:13px;">Total Value: RM ${(qty*cost).toFixed(2)}</div>
+            <div style="color:#10b981; font-size:13px; margin-top:2px;">Potential Value: RM ${(qty*price).toFixed(2)}</div>
+         </div>
+       </div>
+     `;
+  });
+
+  return `<!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Reference Report | ${companyInfo.name}</title>
+      <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f8fafc; margin: 0; padding: 20px; color: #1e293b; }
+        .container { max-width: 800px; margin: 0 auto; background: #fff; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
+        .header { text-align: center; border-bottom: 2px solid #e2e8f0; padding-bottom: 20px; margin-bottom: 20px; }
+        .company-name { font-size: 26px; font-weight: bold; color: #3b82f6; margin-bottom: 5px; }
+        .company-details { font-size: 14px; color: #64748b; line-height: 1.5; }
+        .doc-title { font-size: 22px; font-weight: 800; margin: 25px 0; text-align: center; color: #0f172a; text-transform: uppercase; letter-spacing: 1px; }
+        .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 30px; font-size: 14px; background: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; }
+        .info-label { font-weight: bold; color: #64748b; font-size: 12px; text-transform: uppercase; }
+        .info-value { font-weight: 600; font-size: 15px; margin-top: 4px; color: #1e293b; }
+        .items-section { margin-bottom: 30px; }
+        .items-header { display: flex; font-weight: bold; color: #64748b; font-size: 13px; text-transform: uppercase; padding-bottom: 10px; border-bottom: 2px solid #e2e8f0; margin-bottom: 10px; }
+        .item-row { display: flex; justify-content: space-between; border-bottom: 1px solid #f1f5f9; padding: 12px 0; align-items: center; }
+        .item-info { flex: 1; }
+        .item-name { font-weight: 600; color: #1e293b; }
+        .item-sku { color: #94a3b8; font-size: 12px; margin-left: 5px; font-weight: normal; }
+        .item-meta { color: #64748b; font-size: 13px; margin-top: 6px; }
+        .item-total { text-align: right; font-weight: bold; }
+        .summary-box { background: #1e293b; padding: 20px; border-radius: 8px; margin-top: 20px; color: #fff; }
+        .summary-title { margin: 0 0 15px 0; font-size: 18px; color: #3b82f6; border-bottom: 1px solid #334155; padding-bottom: 10px; }
+        .summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+        .sum-label { color: #94a3b8; font-size: 12px; text-transform: uppercase; }
+        .sum-val { font-size: 18px; font-weight: bold; margin-top: 5px; }
+        .footer { text-align: center; margin-top: 40px; font-size: 12px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 20px; }
+        @media (max-width: 600px) { .info-grid, .summary-grid { grid-template-columns: 1fr; } body { padding: 10px; } .container { padding: 15px; } }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <div class="company-name">${companyInfo.logoText}</div>
+          <div class="company-details">${companyInfo.address}<br>${companyInfo.phone} | ${companyInfo.email}</div>
+        </div>
+        <div class="doc-title">REFERENCE REPORT</div>
+        <div class="info-grid">
+          <div><div class="info-label">Report ID</div><div class="info-value" style="color: #3b82f6;">${reportData.reportNumber || 'N/A'}</div></div>
+          <div><div class="info-label">Generated Date</div><div class="info-value">${reportData.date || new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Kuala_Lumpur' })}</div></div>
+          <div><div class="info-label">Report Type</div><div class="info-value">Custom Selection</div></div>
+          <div><div class="info-label">Generated By</div><div class="info-value">${reportData.createdBy || 'System'}</div></div>
+        </div>
+        <div class="items-section">
+          <div class="items-header">
+            <div style="flex:1">Item Details</div>
+            <div>Totals</div>
+          </div>
+          ${itemsHtml}
+        </div>
+        <div class="summary-box">
+          <h3 class="summary-title">Reference Summary</h3>
+          <div class="summary-grid">
+            <div><div class="sum-label">Total Product Types</div><div class="sum-val">${reportData.items.length}</div></div>
+            <div><div class="sum-label">Total Selected Units</div><div class="sum-val">${totalItems}</div></div>
+            <div><div class="sum-label">Total Inventory Value</div><div class="sum-val" style="color:#ef4444;">RM ${totalInventoryValue.toFixed(2)}</div></div>
+            <div><div class="sum-label">Total Potential Value</div><div class="sum-val" style="color:#10b981;">RM ${totalPotentialValue.toFixed(2)}</div></div>
+          </div>
         </div>
         <div class="footer">
           Generated securely by ${companyInfo.name} System<br>
@@ -993,34 +1092,82 @@ app.post('/generate-reference-report-pdf', async (req, res) => {
     doc.moveTo(50, doc.y).lineTo(550, doc.y).strokeColor('#e2e8f0').lineWidth(1).stroke();
     doc.moveDown(1);
     
-    const leftColumn = 50, rightColumn = 300;
+    // ==========================================
+    // Strict Alignment Grid for Header Info
+    // ==========================================
+    const startY = doc.y;
+    const col1LabelX = 50;
+    const col1ValueX = 135;
+    const col2LabelX = 320;
+    const col2ValueX = 405;
     
     const displayDate = referenceData.date || new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Kuala_Lumpur' });
+
+    // Row 1
+    doc.fillColor('#1e293b').fontSize(11).font('Helvetica-Bold').text('Report ID:', col1LabelX, startY);
+    doc.fillColor('#3b82f6').font('Helvetica').text(referenceData.reportNumber || 'N/A', col1ValueX, startY);
     
-    doc.fillColor('#1e293b').fontSize(11).font('Helvetica').text('Reference Number:', leftColumn, doc.y, { continued: true }).fillColor('#3b82f6').font('Helvetica-Bold').text(` ${referenceData.reportNumber || 'REF-N/A'}`)
-       .fillColor('#1e293b').font('Helvetica').text('Report Date:', leftColumn, doc.y + 20, { continued: true }).fillColor('#64748b').text(` ${displayDate}`)
-       .fillColor('#1e293b').text('Generated By:', rightColumn, doc.y - 40, { continued: true }).fillColor('#64748b').text(` ${referenceData.createdBy || 'Inventory System'}`);
+    doc.fillColor('#1e293b').font('Helvetica-Bold').text('Total Items:', col2LabelX, startY);
+    doc.fillColor('#64748b').font('Helvetica').text(`${referenceData.items.length}`, col2ValueX, startY);
+
+    // Row 2
+    doc.fillColor('#1e293b').font('Helvetica-Bold').text('Generated:', col1LabelX, startY + 20);
+    doc.fillColor('#64748b').font('Helvetica').text(displayDate, col1ValueX, startY + 20);
     
-    doc.moveDown(2);
+    doc.fillColor('#1e293b').font('Helvetica-Bold').text('Report Type:', col2LabelX, startY + 20);
+    doc.fillColor('#64748b').font('Helvetica').text('Custom Selection', col2ValueX, startY + 20);
+
+    // Row 3
+    doc.fillColor('#1e293b').font('Helvetica-Bold').text('Prepared By:', col1LabelX, startY + 40);
+    doc.fillColor('#64748b').font('Helvetica').text(referenceData.createdBy || 'Inventory System', col1ValueX, startY + 40);
+    
+    // Reset Y position for the table
+    doc.y = startY + 70;
+    // ==========================================
+    
     const tableTop = doc.y;
     doc.fillColor('#ffffff').rect(50, tableTop, 500, 25).fill('#3b82f6');
-    doc.fillColor('#ffffff').fontSize(10).font('Helvetica-Bold')
-       .text('Item Description', 55, tableTop + 8).text('SKU', 200, tableTop + 8).text('Qty', 350, tableTop + 8).text('Unit Price', 400, tableTop + 8).text('Total', 470, tableTop + 8);
+    
+    // Adjusted Table Header Layout
+    doc.fillColor('#ffffff').fontSize(9).font('Helvetica-Bold')
+       .text('#', 55, tableTop + 8)
+       .text('SKU', 75, tableTop + 8)
+       .text('Product Name', 125, tableTop + 8)
+       .text('Category', 235, tableTop + 8)
+       .text('Qty', 300, tableTop + 8)
+       .text('Cost(RM)', 340, tableTop + 8)
+       .text('Price(RM)', 400, tableTop + 8)
+       .text('Value(RM)', 460, tableTop + 8);
     
     let yPosition = tableTop + 35;
-    let itemsPerPage = 15;
+    let totalInventoryValue = 0, totalPotentialValue = 0, totalItems = 0;
+    let itemsPerPage = 20;
     const displayItems = referenceData.items.slice(0, itemsPerPage);
     
     displayItems.forEach((item, index) => {
       const quantity = item.invoiceQty || item.quantity || 1;
+      const unitCost = item.unitCost || 0;
       const unitPrice = item.unitPrice || 0;
-      const itemTotal = quantity * unitPrice;
-      if (index % 2 === 0) doc.fillColor('#f8fafc').rect(50, yPosition - 5, 500, 30).fill();
       
-      doc.fillColor('#1e293b').font('Helvetica').fontSize(9)
-         .text(item.name || 'Unnamed Item', 55, yPosition).text(item.sku || 'N/A', 200, yPosition).text(quantity.toString(), 350, yPosition).text(`RM ${unitPrice.toFixed(2)}`, 400, yPosition).text(`RM ${itemTotal.toFixed(2)}`, 470, yPosition);
-      doc.fillColor('#64748b').fontSize(7).text(`Category: ${item.category || 'N/A'}`, 55, yPosition + 12);
-      yPosition += 30;
+      const inventoryValue = quantity * unitCost;
+      const potentialValue = quantity * unitPrice;
+      
+      totalInventoryValue += inventoryValue; 
+      totalPotentialValue += potentialValue; 
+      totalItems += quantity;
+      
+      if (index % 2 === 0) doc.fillColor('#f8fafc').rect(50, yPosition - 5, 500, 20).fill();
+      
+      doc.fillColor('#1e293b').font('Helvetica').fontSize(8)
+         .text((index + 1).toString(), 55, yPosition)
+         .text((item.sku || 'N/A').substring(0, 10), 75, yPosition)
+         .text((item.name || 'Unnamed Item').substring(0, 20) + ((item.name || '').length > 20 ? '...' : ''), 125, yPosition)
+         .text((item.category || 'N/A').substring(0, 10) + ((item.category || '').length > 10 ? '...' : ''), 235, yPosition)
+         .text(quantity.toString(), 300, yPosition)
+         .text(`${unitCost.toFixed(2)}`, 340, yPosition)
+         .text(`${unitPrice.toFixed(2)}`, 400, yPosition)
+         .text(`${inventoryValue.toFixed(2)}`, 460, yPosition);
+      yPosition += 20;
     });
     
     if (referenceData.items.length > itemsPerPage) {
@@ -1028,19 +1175,39 @@ app.post('/generate-reference-report-pdf', async (req, res) => {
       yPosition += 20;
     }
     
-    // Total section & QR
-    const totalY = Math.min(yPosition + 20, 650);
-    doc.moveTo(350, totalY).lineTo(550, totalY).strokeColor('#e2e8f0').lineWidth(1).stroke();
-    doc.fillColor('#1e293b').fontSize(12).font('Helvetica-Bold').text('Grand Total:', 350, totalY + 10, { continued: true }).fillColor('#3b82f6').text(` RM ${(referenceData.total || 0).toFixed(2)}`, { align: 'right' });
+    // Summary Layout & Alignment
+    const summaryY = Math.min(yPosition + 30, 650);
+    doc.fillColor('#f8fafc').rect(50, summaryY, 500, 100).fill();
+    doc.strokeColor('#e2e8f0').rect(50, summaryY, 500, 100).stroke();
     
-    // QR Code generation
+    // Summary Title
+    doc.fillColor('#1e293b').fontSize(12).font('Helvetica-Bold').text('REFERENCE SUMMARY', 60, summaryY + 15);
+    
+    // Left Summary Column
+    doc.fillColor('#64748b').fontSize(9).font('Helvetica').text('Total Products:', 60, summaryY + 40);
+    doc.fillColor('#1e293b').text(`${referenceData.items.length}`, 145, summaryY + 40);
+    
+    doc.fillColor('#64748b').text('Total Units:', 60, summaryY + 55);
+    doc.fillColor('#1e293b').text(`${totalItems}`, 145, summaryY + 55);
+    
+    // Middle Summary Column
+    doc.fillColor('#64748b').text('Inventory Value:', 215, summaryY + 40);
+    doc.fillColor('#ef4444').text(`RM ${totalInventoryValue.toFixed(2)}`, 305, summaryY + 40);
+    
+    doc.fillColor('#64748b').text('Potential Value:', 215, summaryY + 55);
+    doc.fillColor('#10b981').text(`RM ${totalPotentialValue.toFixed(2)}`, 305, summaryY + 55);
+    
+    doc.fillColor('#64748b').text('Profit Potential:', 215, summaryY + 70);
+    doc.fillColor('#3b82f6').text(`RM ${(totalPotentialValue - totalInventoryValue).toFixed(2)}`, 305, summaryY + 70);
+    
+    // QR Code exactly on the right side of the summary box
     if (referenceData._id) {
         const hostUrl = req.get('host') || `localhost:${PORT}`;
         const docUrl = `${req.protocol}://${hostUrl}/view/reference/${referenceData._id}`;
         const qrCodeDataUrl = await QRCode.toDataURL(docUrl, { errorCorrectionLevel: 'M', margin: 1 });
         const qrImageBuffer = Buffer.from(qrCodeDataUrl.split(',')[1], 'base64');
-        doc.image(qrImageBuffer, 50, totalY, { width: 60 });
-        doc.fillColor('#64748b').fontSize(8).font('Helvetica').text('Scan to view online', 45, totalY + 65);
+        doc.image(qrImageBuffer, 460, summaryY + 15, { width: 70 });
+        doc.fillColor('#64748b').fontSize(8).font('Helvetica').text('Scan to view', 465, summaryY + 87);
     }
 
     addFooter(doc, 750);
@@ -2098,7 +2265,8 @@ function getReferencePage() {
       <h3>Reference Report Items</h3>
       <div id="referenceItems"></div>
       <div class="invoice-total">
-        <h4>Total: RM <span id="referenceTotal">0.00</span></h4>
+        <h4>Inventory Value: RM <span id="refInventoryValue">0.00</span></h4>
+        <h4 style="color: var(--success); margin-top: 5px;">Potential Value: RM <span id="refPotentialValue">0.00</span></h4>
       </div>
       <div class="controls">
         <button class="btn info" id="downloadPdf" onclick="downloadReferencePDF()">Download PDF</button>
@@ -2137,7 +2305,7 @@ function getReferencePage() {
             <div style="display: flex; justify-content: space-between; align-items: center;">
               <div>
                 <strong>\${item.name || 'Unnamed Item'}</strong> (\${item.sku || 'N/A'})<br>
-                <small>Category: \${item.category || 'N/A'} | Available: \${item.quantity || 0} | Price: RM \${(item.unitPrice || 0).toFixed(2)}</small>
+                <small>Category: \${item.category || 'N/A'} | Available: \${item.quantity || 0} | Cost: RM \${(item.unitCost || 0).toFixed(2)} | Price: RM \${(item.unitPrice || 0).toFixed(2)}</small>
               </div>
               <div>
                 <input type="number" id="qty-\${index}" min="1" max="\${item.quantity || 0}" value="1" style="width: 80px; margin-right: 10px;">
@@ -2181,15 +2349,21 @@ function getReferencePage() {
 
     function updateReferenceDisplay() {
       const container = document.getElementById('referenceItems');
-      const totalElement = document.getElementById('referenceTotal');
+      const invValueElement = document.getElementById('refInventoryValue');
+      const potValueElement = document.getElementById('refPotentialValue');
+      
       container.innerHTML = selectedReferenceItems.length ? '' : '<p class="no-data">No items in reference report</p>';
       
-      let total = 0;
+      let inventoryValue = 0;
+      let potentialValue = 0;
+      
       selectedReferenceItems.forEach((item, i) => {
         const quantity = item.invoiceQty || item.quantity || 1;
+        const unitCost = item.unitCost || 0;
         const unitPrice = item.unitPrice || 0;
-        const itemTotal = quantity * unitPrice;
-        total += itemTotal;
+        
+        inventoryValue += quantity * unitCost;
+        potentialValue += quantity * unitPrice;
         
         const itemDiv = document.createElement('div');
         itemDiv.className = 'invoice-item';
@@ -2197,7 +2371,7 @@ function getReferencePage() {
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
               <strong>\${item.name || 'Unnamed Item'}</strong> (\${item.sku || 'N/A'})<br>
-              <small>Qty: \${quantity} × RM \${unitPrice.toFixed(2)} = RM \${itemTotal.toFixed(2)}</small>
+              <small>Qty: \${quantity} | Val: RM \${(quantity * unitCost).toFixed(2)} | Pot: RM \${(quantity * unitPrice).toFixed(2)}</small>
             </div>
             <button class="btn small danger" onclick="removeFromReference(\${i})">Remove</button>
           </div>
@@ -2205,7 +2379,8 @@ function getReferencePage() {
         container.appendChild(itemDiv);
       });
       
-      totalElement.textContent = total.toFixed(2);
+      invValueElement.textContent = inventoryValue.toFixed(2);
+      potValueElement.textContent = potentialValue.toFixed(2);
       document.getElementById('downloadPdf').disabled = selectedReferenceItems.length === 0;
     }
 
@@ -2228,9 +2403,10 @@ function getReferencePage() {
       try {
         const user = JSON.parse(localStorage.getItem('currentUser') || '{}');
         const referenceData = {
-          date: new Date().toLocaleString('en-GB'),
+          date: new Date().toLocaleString('en-GB', { timeZone: 'Asia/Kuala_Lumpur' }),
           items: selectedReferenceItems,
-          total: parseFloat(document.getElementById('referenceTotal').textContent) || 0,
+          totalInventoryValue: parseFloat(document.getElementById('refInventoryValue').textContent) || 0,
+          totalPotentialValue: parseFloat(document.getElementById('refPotentialValue').textContent) || 0,
           createdBy: user.username
         };
 
@@ -2908,7 +3084,7 @@ function getStatementPage() {
                 <div>
                   <strong>\${report.reportNumber || 'N/A'}</strong><br>
                   <small>Date: \${report.date || new Date(report.createdAt).toLocaleString('en-GB', { timeZone: 'Asia/Kuala_Lumpur' })}</small><br>
-                  <small>Items: \${report.items?.length || 0} | Total: RM \${(report.total || 0).toFixed(2)}</small>
+                  <small>Items: \${report.items?.length || 0} | Inv. Value: RM \${(report.totalInventoryValue || 0).toFixed(2)} | Pot. Value: RM \${(report.totalPotentialValue || report.total || 0).toFixed(2)}</small>
                 </div>
                 <div>
                   <button class="btn small" onclick="downloadReferenceReportPDF('\${report._id}')">📥 PDF</button>
@@ -3681,8 +3857,8 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('🔐 Security Code: ' + VALID_SECURITY_CODE);
   console.log('🌐 Main URL: http://localhost:' + PORT + '/');
   console.log('✅ ALL FEATURES INCLUDED:');
-  console.log('   ✅ System-wide dates uniformly updated to DD/MM/YYYY');
-  console.log('   ✅ Form Input Dates default properly using YYYY-MM-DD local format but save correctly');
-  console.log('   ✅ SCANNABLE QR CODES on all PDFs linking to live digital copies');
-  console.log('   ✅ FIXED: Reference Report QR web view accurately reflects item invoice quantities');
+  console.log('   ✅ Reference Report Format matches Inventory Report entirely (PDF & Web View)');
+  console.log('   ✅ Reference Totals accurately reflect both Total Value & Potential Value');
+  console.log('   ✅ Only requested invoice quantities dynamically shown on Reference Reports');
+  console.log('   ✅ Dates formatting synchronized properly throughout the app (DD/MM/YYYY)');
 });
